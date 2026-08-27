@@ -32,6 +32,7 @@ import {
   subscribeToGame,
   reconnectFirestoreAndSync,
 } from './services/gameService';
+import { p2pMeshService } from './services/p2pMeshService';
 import { getLegalMoves, hasPlayerWon, countTokensHome } from './game-engine/engine';
 import { getTranslation } from './i18n/translations';
 import { soundFx } from './utils/sound';
@@ -43,7 +44,6 @@ import { SnakeLadderBoard } from './components/board/SnakeLadderBoard';
 import { DiceComponent } from './components/game/DiceComponent';
 import { TurnIndicator } from './components/game/TurnIndicator';
 import { PlayerCard } from './components/game/PlayerCard';
-import { VoicePanel } from './components/game/VoicePanel';
 import { QuickReactions } from './components/game/QuickReactions';
 import { LobbyScreen } from './components/room/LobbyScreen';
 import { CreateRoomModal } from './components/room/CreateRoomModal';
@@ -115,7 +115,6 @@ export default function App() {
   const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
   const [room, setRoom] = useState<RoomDocument | null>(null);
   const [players, setPlayers] = useState<Record<string, RoomPlayer>>({});
-  const [voiceSessions, setVoiceSessions] = useState<Record<string, { enabled: boolean; isSpeaking: boolean }>>({});
   const [game, setGame] = useState<GameDocument | null>(null);
 
   // Local UI Interaction State
@@ -203,39 +202,14 @@ export default function App() {
       }
     });
 
-    const voiceSessionsRef = collection(db, 'rooms', currentRoomId, 'voiceSessions');
-    const unsubVoice = onSnapshot(
-      voiceSessionsRef,
-      (snapshot) => {
-        const vMap: Record<string, { enabled: boolean; isSpeaking: boolean }> = {};
-        snapshot.docs.forEach((d) => {
-          vMap[d.id] = d.data() as any;
-        });
-        setVoiceSessions(vMap);
-      },
-      () => {}
-    );
-
     return () => {
       unsubRoom();
       unsubPlayers();
-      unsubVoice();
     };
   }, [currentRoomId]);
 
-  // Merge live WebRTC voice session speaking statuses into players object
-  const mergedPlayers = useMemo(() => {
-    const res: Record<string, RoomPlayer> = {};
-    (Object.entries(players) as [string, RoomPlayer][]).forEach(([uid, p]) => {
-      const vSession = voiceSessions[uid];
-      res[uid] = {
-        ...p,
-        voiceEnabled: vSession ? Boolean(vSession.enabled) : Boolean(p.voiceEnabled),
-        isSpeaking: vSession ? Boolean(vSession.isSpeaking) : Boolean(p.isSpeaking),
-      };
-    });
-    return res;
-  }, [players, voiceSessions]);
+  // Players alias for consistent board and UI mapping
+  const mergedPlayers = players;
 
   // 3. Real-time Game Document synchronization
   useEffect(() => {
@@ -252,6 +226,30 @@ export default function App() {
 
     return () => unsubGame();
   }, [currentRoomId, room?.currentGameId]);
+
+  // 4. Ultra-low latency WebRTC P2P Data Mesh lifecycle
+  const [p2pConnectedPeers, setP2pConnectedPeers] = useState(0);
+  const [p2pLatency, setP2pLatency] = useState(24);
+
+  useEffect(() => {
+    if (!currentRoomId || !user?.uid) {
+      p2pMeshService.teardown();
+      setP2pConnectedPeers(0);
+      return;
+    }
+
+    p2pMeshService.initRoomMesh(currentRoomId, user.uid);
+
+    const unsubStatus = p2pMeshService.onStatusChange((peers, latency) => {
+      setP2pConnectedPeers(peers);
+      setP2pLatency(latency);
+    });
+
+    return () => {
+      unsubStatus();
+      p2pMeshService.teardown();
+    };
+  }, [currentRoomId, user?.uid]);
 
   // Map uid to player slot
   const slotMap = useMemo(() => {
@@ -508,6 +506,9 @@ export default function App() {
     if (game.currentPlayerUid !== user.uid) return;
 
     try {
+      // 1. Broadcast immediate roll start so all peers animate dice without lag
+      p2pMeshService.broadcast('DICE_ROLL_START', { uid: user.uid, roomId: currentRoomId });
+
       // Haptic tactile feedback for dice roll on mobile devices
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
         try {
@@ -725,14 +726,8 @@ export default function App() {
           <div>
             {/* ================= DESKTOP 3-COLUMN LAYOUT (lg and above) ================= */}
             <div className="hidden lg:flex flex-row items-start justify-center gap-6 w-full">
-              {/* Left Column: Player Cards, Voice, Reactions & Tools */}
+              {/* Left Column: Player Cards, Reactions & Tools */}
               <div className="w-72 flex flex-col gap-3 shrink-0">
-                <VoicePanel
-                  roomId={room.roomId}
-                  myUid={user.uid}
-                  language={language}
-                />
-
                 <TurnIndicator
                   game={game}
                   players={mergedPlayers}
@@ -820,13 +815,6 @@ export default function App() {
 
             {/* ================= MOBILE-OPTIMIZED SINGLE-VIEW LAYOUT (< lg) ================= */}
             <div className="flex lg:hidden flex-col items-center gap-3 w-full max-w-lg mx-auto">
-              {/* Mobile Voice Chat Toggle Panel */}
-              <VoicePanel
-                roomId={room.roomId}
-                myUid={user.uid}
-                language={language}
-              />
-
               {/* Mobile 4-Player Compact Horizontal Status Strip */}
               <div className="w-full grid grid-cols-4 gap-1.5 bg-neutral-950 border border-neutral-850 p-2 rounded-2xl shadow">
                 {game.playerOrder.map((uid) => {
@@ -855,14 +843,6 @@ export default function App() {
                           : colorStyles
                       }`}
                     >
-                      {/* Speaking ping indicator */}
-                      {p.isSpeaking && (
-                        <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-                        </span>
-                      )}
-
                       <div className="flex items-center gap-1">
                         <span className="text-base sm:text-lg leading-none">{p.avatar || '👤'}</span>
                         <span className="text-[10px] font-black">{p.slot}</span>
@@ -883,21 +863,16 @@ export default function App() {
                 })}
               </div>
 
-              {/* Mobile Voice & Tool Quick Bar */}
-              <div className="w-full flex items-center justify-between gap-2">
-                <div className="flex-1">
-                  <VoicePanel
-                    roomId={room.roomId}
-                    myUid={user.uid}
-                    language={language}
-                  />
-                </div>
+              {/* Mobile Quick Reactions & History Bar */}
+              <div className="w-full flex items-center justify-between gap-2 px-1">
+                <QuickReactions roomId={room.roomId} user={user} />
                 <button
                   onClick={() => setShowHistoryModal(true)}
-                  className="px-2.5 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-neutral-300 hover:text-white text-xs font-semibold flex items-center gap-1 shrink-0"
+                  className="px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-neutral-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
                   title={getTranslation(language, 'myRooms')}
                 >
                   <History className="w-3.5 h-3.5 text-amber-400" />
+                  <span>{getTranslation(language, 'myRooms')}</span>
                 </button>
               </div>
 
@@ -1012,8 +987,8 @@ export default function App() {
               </h1>
               <p className="text-xs sm:text-sm text-neutral-400 max-w-sm mx-auto">
                 {language === 'bn'
-                  ? 'লাইভ ভয়েস চ্যাটসহ অনলাইন মাল্টিপ্লেয়ার লুডু'
-                  : 'Online multiplayer Ludo with live voice chat'}
+                  ? 'অনলাইন মাল্টিপ্লেয়ার লুডু ও সাপ-লুডু'
+                  : 'Online multiplayer Ludo & Snake-Ladder'}
               </p>
             </div>
 

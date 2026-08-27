@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { RoomPlayer, PlayerColor, Language, GameDocument } from '../../types';
 import { getTranslation } from '../../i18n/translations';
 import { countTokensHome } from '../../game-engine/engine';
-import { Mic, MicOff, Trophy, Wifi, WifiOff, Crown } from 'lucide-react';
+import { Trophy, Wifi, WifiOff, Crown } from 'lucide-react';
 
 interface PlayerCardProps {
   player: RoomPlayer;
@@ -116,10 +116,6 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
                 <Wifi className="w-3 h-3 text-emerald-400" title="Connected" />
               ) : (
                 <WifiOff className="w-3 h-3 text-red-400" title="Disconnected" />
-              )}
-
-              {player.voiceEnabled && (
-                <Mic className={`w-3 h-3 ${player.isSpeaking ? 'text-emerald-400' : 'text-neutral-400'}`} />
               )}
             </div>
           </div>

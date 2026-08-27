@@ -163,7 +163,7 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
 
   const handleShareSummary = async () => {
     soundFx.click();
-    const shareText = `🎲 *LooDoo (লুডু) Match Summary*\n🏆 Winner: ${winner?.displayName || 'Champion'} 👑\n👥 Players: ${playerList.map((p) => p.displayName).join(', ')}\n⚡ Mode: ${room.settings?.gameMode || 'Classic'}\n\nPlay Real-Time Bangladeshi Ludo with Voice Chat! 🎮`;
+    const shareText = `🎲 *LooDoo (লুডু) Match Summary*\n🏆 Winner: ${winner?.displayName || 'Champion'} 👑\n👥 Players: ${playerList.map((p) => p.displayName).join(', ')}\n⚡ Mode: ${room.settings?.gameMode || 'Classic'}\n\nPlay Real-Time Bangladeshi Ludo with friends! 🎮`;
 
     if (navigator.share) {
       try {

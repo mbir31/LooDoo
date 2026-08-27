@@ -29,7 +29,6 @@ import {
   Loader2,
 } from 'lucide-react';
 import { AdminSettingsModal } from './AdminSettingsModal';
-import { VoicePanel } from '../game/VoicePanel';
 import { InstallPwaButton } from '../ui/InstallPwaButton';
 
 interface LobbyScreenProps {
@@ -148,13 +147,6 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
           <span>{copiedInvite ? getTranslation(language, 'inviteCopied') : getTranslation(language, 'shareInvite')}</span>
         </button>
       </div>
-
-      {/* Live Voice Chat in Lobby */}
-      <VoicePanel
-        roomId={room.roomId}
-        myUid={currentUser.uid}
-        language={language}
-      />
 
       {/* Player Slots Grid */}
       <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-4 shadow-xl flex flex-col gap-3">

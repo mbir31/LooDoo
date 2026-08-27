@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { UserProfile, ReactionEvent } from '../../types';
 import { sendReaction } from '../../services/gameService';
+import { p2pMeshService } from '../../services/p2pMeshService';
 import { soundFx } from '../../utils/sound';
 import { collection, onSnapshot, query, limit, orderBy } from 'firebase/firestore';
 import { db } from '../../firebase/config';
@@ -49,35 +50,53 @@ export const QuickReactions: React.FC<QuickReactionsProps> = ({ roomId, user, on
   useEffect(() => {
     if (!roomId) return;
 
+    const seenIds = new Set<string>();
+
+    const triggerReaction = (data: ReactionEvent) => {
+      if (!data?.id || seenIds.has(data.id)) return;
+      seenIds.add(data.id);
+
+      if (Date.now() - data.timestamp < 6000) {
+        const reactionItem = { ...data, key: `${data.id}_${Date.now()}` };
+        setActiveReactions((prev) => [...prev.slice(-4), reactionItem]);
+
+        if (data.tauntTextBn) {
+          soundFx.playTaunt(data.tauntId || 'chokka_maro', data.tauntTextBn, data.tauntTextEn);
+        }
+
+        setTimeout(() => {
+          setActiveReactions((prev) => prev.filter((r) => r.key !== reactionItem.key));
+        }, 3500);
+      }
+    };
+
+    // 1. Instant P2P Reaction Stream (< 20ms)
+    const unsubP2P = p2pMeshService.onMessage((msg) => {
+      if (msg.type === 'REACTION' && msg.payload?.reaction) {
+        triggerReaction(msg.payload.reaction as ReactionEvent);
+      }
+    });
+
+    // 2. Fallback Firestore Realtime Query
     const q = query(
       collection(db, 'rooms', roomId, 'reactions'),
       orderBy('timestamp', 'desc'),
       limit(5)
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubFirestore = onSnapshot(q, (snapshot) => {
       snapshot.docChanges().forEach((change) => {
         if (change.type === 'added') {
           const data = change.doc.data() as ReactionEvent;
-          // Only show recent reactions (last 6 seconds)
-          if (Date.now() - data.timestamp < 6000) {
-            const reactionItem = { ...data, key: `${data.id}_${Date.now()}` };
-            setActiveReactions((prev) => [...prev.slice(-4), reactionItem]);
-
-            // Trigger audio taunt sound & speech
-            if (data.tauntTextBn) {
-              soundFx.playTaunt(data.tauntId || 'chokka_maro', data.tauntTextBn, data.tauntTextEn);
-            }
-
-            setTimeout(() => {
-              setActiveReactions((prev) => prev.filter((r) => r.key !== reactionItem.key));
-            }, 3500);
-          }
+          triggerReaction(data);
         }
       });
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubP2P();
+      unsubFirestore();
+    };
   }, [roomId]);
 
   // Preview sound effect & voice locally without sending to room

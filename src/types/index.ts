@@ -80,8 +80,6 @@ export interface RoomPlayer {
   status: 'active' | 'disconnected' | 'left';
   joinedAt: number;
   lastSeenAt: number;
-  voiceEnabled?: boolean;
-  isSpeaking?: boolean;
   sixesRolled?: number;
   capturesMade?: number;
 }
@@ -197,22 +195,6 @@ export interface GameEvent {
   payload?: any;
   messageEn?: string;
   messageBn?: string;
-}
-
-export interface VoiceSignal {
-  id: string;
-  fromUid: string;
-  toUid: string;
-  type: 'OFFER' | 'ANSWER' | 'ICE_CANDIDATE' | 'BYE';
-  payload: any;
-  createdAt: number;
-}
-
-export interface VoiceSession {
-  uid: string;
-  enabled: boolean;
-  isSpeaking: boolean;
-  updatedAt: number;
 }
 
 export interface ReactionEvent {

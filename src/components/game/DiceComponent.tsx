@@ -47,7 +47,7 @@ export const DiceComponent: React.FC<DiceComponentProps> = ({
 
     setTimeout(() => {
       setAnimatingRoll(false);
-    }, 650);
+    }, 380);
   };
 
   const displayValue = diceValue ?? 1;
@@ -131,7 +131,7 @@ export const DiceComponent: React.FC<DiceComponentProps> = ({
           }
           transition={
             animatingRoll || isRolling
-              ? { duration: 0.65, ease: 'easeInOut' }
+              ? { duration: 0.38, ease: 'easeInOut' }
               : canRoll
               ? { repeat: Infinity, duration: 1.6, ease: 'easeInOut' }
               : { duration: 0.2 }

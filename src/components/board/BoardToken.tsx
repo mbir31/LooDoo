@@ -110,18 +110,18 @@ export const BoardToken: React.FC<BoardTokenProps> = ({
 
       soundFx.tokenSpawn();
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        navigator.vibrate([25, 30, 35]);
+        navigator.vibrate([20, 25]);
       }
 
       setAnimationState({
         key: Date.now(),
         lefts,
         tops,
-        duration: 0.35,
+        duration: 0.22,
         isCaptureReturn: false,
       });
 
-      const timer = setTimeout(() => setAnimationState(null), 400);
+      const timer = setTimeout(() => setAnimationState(null), 250);
       return () => clearTimeout(timer);
     }
 
@@ -136,11 +136,11 @@ export const BoardToken: React.FC<BoardTokenProps> = ({
         key: Date.now(),
         lefts,
         tops,
-        duration: 0.5,
+        duration: 0.32,
         isCaptureReturn: true,
       });
 
-      const timer = setTimeout(() => setAnimationState(null), 550);
+      const timer = setTimeout(() => setAnimationState(null), 360);
       return () => clearTimeout(timer);
     }
 
@@ -159,11 +159,11 @@ export const BoardToken: React.FC<BoardTokenProps> = ({
       if (waypoints.length > 1) {
         const lefts = waypoints.map((w) => `${(w[1] / 15) * 100}%`);
         const tops = waypoints.map((w) => `${(w[0] / 15) * 100}%`);
-        const duration = Math.min(1.2, Math.max(0.28, steps * 0.13));
+        const duration = Math.min(0.48, Math.max(0.18, steps * 0.065));
 
         soundFx.tokenMoveSequence(steps);
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
-          navigator.vibrate(Array(steps).fill(12));
+          navigator.vibrate(Array(steps).fill(10));
         }
 
         setAnimationState({
@@ -174,7 +174,7 @@ export const BoardToken: React.FC<BoardTokenProps> = ({
           isCaptureReturn: false,
         });
 
-        const timer = setTimeout(() => setAnimationState(null), duration * 1000 + 50);
+        const timer = setTimeout(() => setAnimationState(null), duration * 1000 + 40);
         return () => clearTimeout(timer);
       }
     }
@@ -186,10 +186,10 @@ export const BoardToken: React.FC<BoardTokenProps> = ({
       key: Date.now(),
       lefts,
       tops,
-      duration: 0.35,
+      duration: 0.22,
       isCaptureReturn: false,
     });
-    const timer = setTimeout(() => setAnimationState(null), 400);
+    const timer = setTimeout(() => setAnimationState(null), 250);
     return () => clearTimeout(timer);
   }, [zone, progress, slot, tokenId, coords, currentLeft, currentTop]);
 

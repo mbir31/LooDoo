@@ -40,7 +40,6 @@ LooDoo tries to capture the feeling of the Ludo we grew up playing.
 | 👥 বন্ধুদের সাথে Online Multiplayer | Real-time online multiplayer |
 | 📱 এক ফোনে ২-৪ জন | 2-4 player Pass & Play |
 | 🤖 AI-এর বিরুদ্ধে খেলা | Play against AI |
-| 🎙️ Live Voice Chat | Real-time voice chat |
 | 😂 বাংলা মজার Soundboard | Fun Bangla soundboard & reactions |
 | ⚔️ 2v2 Team Battle | 2v2 partnership matches |
 | 🐍 সাপ-লুডু | Bangladeshi-inspired Snakes & Ladders |
@@ -115,23 +114,6 @@ RED + YELLOW 🆚 GREEN + BLUE
 Communication, strategy and a little bit of luck can decide everything.
 
 «🤝 একসাথে খেলুন। একসাথে জিতুন।»
-
----
-
-🎙️ PLAY. TALK. LAUGH.
-
-Live Voice Chat
-
-Why type when you can talk?
-
-LooDoo supports real-time peer-to-peer voice communication during multiplayer matches.
-
-🎙️ Talk with your friends  
-🔇 Mute when needed  
-📊 Live microphone activity visualization  
-🌐 WebRTC peer-to-peer audio  
-
-দূরে থেকেও মনে হবে সবাই একই আড্ডায় বসে আছো।
 
 ---
 
@@ -397,11 +379,11 @@ LooDoo combines modern frontend technology with real-time multiplayer infrastruc
 | ⚡ Vite | Development & build tooling |
 | 🎨 Tailwind CSS | Styling |
 | ✨ Motion | Animations |
-| 🔥 Firebase Firestore | Real-time multiplayer state |
+| ⚡ WebRTC DataChannel | Ultra-low latency (<30ms) peer-to-peer game sync |
+| 🔥 Firebase Firestore | Real-time cloud persistence & room discovery |
 | 🔐 Firebase Authentication | Guest authentication & sessions |
-| 🎙️ WebRTC | Peer-to-peer voice |
 | 🎨 HTML5 Canvas | Match summary generation |
-| 🔊 Web Audio API | Game sounds |
+| 🔊 Web Audio API | Game sounds & Bangla soundboard |
 | 📦 PWA | Installable web experience |
 | ☁️ Vercel | Hosting & deployment |
 
@@ -417,8 +399,7 @@ LooDoo is designed around a lightweight, friction-free multiplayer experience.
 - Anonymous authentication for multiplayer sessions
 - Firestore security rules
 - HTTPS deployment
-- Peer-to-peer voice communication through WebRTC
-- Voice audio is not intended to be stored as game recordings
+- Fast and resilient client-side state handling
 
 ---
 
