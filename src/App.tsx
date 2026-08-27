@@ -193,13 +193,13 @@ export default function App() {
 
     const unsubRoom = subscribeToRoom(currentRoomId, (roomData) => {
       if (roomData) {
-        setRoom(roomData);
+        setRoom({ ...roomData });
       }
     });
 
     const unsubPlayers = subscribeToPlayers(currentRoomId, (playersData) => {
       if (playersData && Object.keys(playersData).length > 0) {
-        setPlayers(playersData);
+        setPlayers({ ...playersData });
       }
     });
 
@@ -246,7 +246,7 @@ export default function App() {
 
     const unsubGame = subscribeToGame(currentRoomId, room.currentGameId, (gameData) => {
       if (gameData) {
-        setGame(gameData);
+        setGame({ ...gameData });
       }
     });
 
@@ -977,6 +977,10 @@ export default function App() {
             currentUser={user}
             language={language}
             onLeaveRoom={handleLeaveRoom}
+            onGameStarted={(gameData, roomData) => {
+              setRoom({ ...roomData });
+              setGame({ ...gameData });
+            }}
           />
         )}
 

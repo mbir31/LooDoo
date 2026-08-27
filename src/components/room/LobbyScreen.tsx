@@ -38,6 +38,7 @@ interface LobbyScreenProps {
   currentUser: UserProfile;
   language: Language;
   onLeaveRoom: () => void;
+  onGameStarted?: (gameData: any, roomData: RoomDocument) => void;
 }
 
 const SLOT_CONFIG: Record<string, { label: string; defaultColor: PlayerColor; border: string; bg: string }> = {
@@ -53,6 +54,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   currentUser,
   language,
   onLeaveRoom,
+  onGameStarted,
 }) => {
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
@@ -106,7 +108,10 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
       soundFx.click();
       setIsStarting(true);
       setErrorMsg(null);
-      await startGame(room.roomId, currentUser.uid);
+      const res = await startGame(room.roomId, currentUser.uid);
+      if (res && res.gameData && res.roomData && onGameStarted) {
+        onGameStarted(res.gameData, res.roomData);
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to start game');
       setIsStarting(false);

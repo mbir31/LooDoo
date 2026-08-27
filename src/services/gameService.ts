@@ -84,25 +84,28 @@ const playersListeners = new Map<string, Set<(players: Record<string, RoomPlayer
 const gameListeners = new Map<string, Set<(game: GameDocument | null) => void>>();
 
 function notifyRoomSubscribers(roomId: string, room: RoomDocument | null) {
+  const cloned = room ? { ...room } : null;
   roomListeners.get(roomId)?.forEach((cb) => {
     try {
-      cb(room);
+      cb(cloned ? { ...cloned } : null);
     } catch (_) {}
   });
 }
 
 function notifyPlayersSubscribers(roomId: string, players: Record<string, RoomPlayer>) {
+  const cloned = { ...players };
   playersListeners.get(roomId)?.forEach((cb) => {
     try {
-      cb(players);
+      cb({ ...cloned });
     } catch (_) {}
   });
 }
 
 function notifyGameSubscribers(roomId: string, game: GameDocument | null) {
+  const cloned = game ? { ...game } : null;
   gameListeners.get(roomId)?.forEach((cb) => {
     try {
-      cb(game);
+      cb(cloned ? { ...cloned } : null);
     } catch (_) {}
   });
 }
@@ -174,7 +177,7 @@ export function subscribeToRoom(
   // Send cached value instantly (0ms)
   const cached = localStore.get(roomId);
   if (cached?.room) {
-    callback(cached.room);
+    callback({ ...cached.room });
   }
 
   // Hook Firestore snapshot
@@ -186,11 +189,12 @@ export function subscribeToRoom(
         const data = snap.data() as RoomDocument;
         let c = localStore.get(roomId);
         if (!c) {
-          c = { room: data, players: {}, game: null, events: [] };
+          c = { room: { ...data }, players: {}, game: null, events: [] };
           localStore.set(roomId, c);
+        } else {
+          c.room = { ...data };
         }
-        c.room = data;
-        callback(data);
+        callback({ ...data });
       }
     },
     () => {}
@@ -214,7 +218,7 @@ export function subscribeToPlayers(
   // Send cached value instantly (0ms)
   const cached = localStore.get(roomId);
   if (cached?.players && Object.keys(cached.players).length > 0) {
-    callback(cached.players);
+    callback({ ...cached.players });
   }
 
   const playersRef = collection(db, 'rooms', roomId, 'players');
@@ -230,7 +234,7 @@ export function subscribeToPlayers(
         if (c) {
           c.players = { ...c.players, ...pMap };
         }
-        callback(pMap);
+        callback({ ...pMap });
       }
     },
     () => {}
@@ -255,7 +259,7 @@ export function subscribeToGame(
   // Send cached value instantly (0ms)
   const cached = localStore.get(roomId);
   if (cached?.game && cached.game.gameId === gameId) {
-    callback(cached.game);
+    callback({ ...cached.game });
   }
 
   const gameRef = doc(db, 'rooms', roomId, 'games', gameId);
@@ -268,11 +272,11 @@ export function subscribeToGame(
         if (c) {
           // If remote version is newer or equal, update
           if (!c.game || data.version >= c.game.version) {
-            c.game = data;
-            callback(data);
+            c.game = { ...data };
+            callback({ ...data });
           }
         } else {
-          callback(data);
+          callback({ ...data });
         }
       }
     },
@@ -679,7 +683,10 @@ export async function togglePlayerReady(
 /**
  * Starts a new Game inside a Room (0ms instant)
  */
-export async function startGame(roomId: string, adminUid: string): Promise<string> {
+export async function startGame(
+  roomId: string,
+  adminUid: string
+): Promise<{ gameId: string; gameData: GameDocument; roomData: RoomDocument }> {
   const cached = localStore.get(roomId);
   let roomData = cached?.room;
 
@@ -692,11 +699,13 @@ export async function startGame(roomId: string, adminUid: string): Promise<strin
   if (roomData.adminUid !== adminUid) throw new Error('errorNotAdmin');
 
   let players: RoomPlayer[] = [];
-  if (cached) {
+  if (cached && Object.keys(cached.players).length >= 2) {
     players = Object.values(cached.players).filter((p) => p.status === 'active');
   } else {
     const snap = await getDocs(collection(db, 'rooms', roomId, 'players')).catch(() => null);
-    if (snap) players = snap.docs.map((d) => d.data() as RoomPlayer);
+    if (snap) {
+      players = snap.docs.map((d) => d.data() as RoomPlayer).filter((p) => p.status === 'active');
+    }
   }
 
   if (players.length < 2) {
@@ -746,37 +755,45 @@ export async function startGame(roomId: string, adminUid: string): Promise<strin
     },
   };
 
+  const updatedRoom: RoomDocument = {
+    ...roomData,
+    currentGameId: gameId,
+    status: 'PLAYING',
+    updatedAt: now,
+  };
+
   // Instant local update (0ms)
   let c = localStore.get(roomId);
   if (!c) {
-    c = { room: roomData, players: {}, game: null, events: [] };
+    c = { room: updatedRoom, players: {}, game: gameData, events: [] };
     localStore.set(roomId, c);
+  } else {
+    c.room = updatedRoom;
+    c.game = gameData;
   }
-  c.room.currentGameId = gameId;
-  c.room.status = 'PLAYING';
-  c.room.updatedAt = now;
-  c.game = gameData;
 
-  notifyRoomSubscribers(roomId, c.room);
-  notifyGameSubscribers(roomId, gameData);
+  notifyRoomSubscribers(roomId, { ...updatedRoom });
+  notifyGameSubscribers(roomId, { ...gameData });
+  broadcastLocalUpdate('ROOM_UPDATED', roomId, { room: updatedRoom, game: gameData });
   broadcastLocalUpdate('GAME_UPDATED', roomId, { game: gameData });
-  broadcastLocalUpdate('ROOM_UPDATED', roomId, { room: c.room });
 
-  // Background Firestore sync
+  // Direct Firestore sync
   const gameRef = doc(db, 'rooms', roomId, 'games', gameId);
   const roomRef = doc(db, 'rooms', roomId);
-  firestoreBackgroundSync(
-    Promise.all([
+  try {
+    await Promise.all([
       setDoc(gameRef, gameData),
       updateDoc(roomRef, {
         currentGameId: gameId,
         status: 'PLAYING',
         updatedAt: now,
-      }).catch(() => {}),
-    ])
-  );
+      }),
+    ]);
+  } catch (err: any) {
+    console.warn('Firestore game start sync notice:', err?.message || err);
+  }
 
-  return gameId;
+  return { gameId, gameData, roomData: updatedRoom };
 }
 
 /**
@@ -1375,7 +1392,10 @@ export async function handleTurnTimeout(roomId: string, gameId: string): Promise
 /**
  * Start Rematch in same Room (0ms)
  */
-export async function startRematch(roomId: string, adminUid: string): Promise<string> {
+export async function startRematch(
+  roomId: string,
+  adminUid: string
+): Promise<{ gameId: string; gameData: GameDocument; roomData: RoomDocument }> {
   return await startGame(roomId, adminUid);
 }
 
