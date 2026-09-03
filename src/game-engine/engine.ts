@@ -1,6 +1,7 @@
 import {
   PlayerColor,
   PlayerSlot,
+  TeamId,
   TokenZone,
   TokenState,
   GameDocument,
@@ -11,6 +12,25 @@ import {
 export const TRACK_LENGTH = 52;
 export const HOME_PATH_START_PROGRESS = 51;
 export const FINAL_HOME_PROGRESS = 56;
+export const TOKENS_PER_PLAYER = 4;
+// Progress values that place a token on the shared ring: 0..50
+export const LAST_TRACK_PROGRESS = HOME_PATH_START_PROGRESS - 1;
+// Progress values that place a token on the home stretch: 51..55
+export const LAST_HOME_PATH_PROGRESS = FINAL_HOME_PROGRESS - 1;
+
+/**
+ * Number of tokens a player must bring home to win.
+ * Single source of truth shared by online, offline and AI gameplay.
+ */
+export function getTokensToWin(settings: Partial<RoomSettings> | undefined | null): number {
+  const explicit = settings?.tokensToWin;
+  if (typeof explicit === 'number' && explicit >= 1) {
+    return Math.min(TOKENS_PER_PLAYER, Math.max(1, Math.floor(explicit)));
+  }
+  if (settings?.gameMode === 'RUSH') return 2;
+  if (settings?.gameMode === 'SNAKE_LADDER') return 1;
+  return TOKENS_PER_PLAYER;
+}
 
 // Starting global track indices for each player slot
 export const SLOT_START_TRACK_INDEX: Record<PlayerSlot, number> = {
@@ -69,6 +89,57 @@ export function areTeammates(slotA: PlayerSlot, slotB: PlayerSlot): boolean {
   const isTeam1A = slotA === 'P1' || slotA === 'P3';
   const isTeam1B = slotB === 'P1' || slotB === 'P3';
   return isTeam1A === isTeam1B;
+}
+
+/** Team 1 = RED (P1) + YELLOW (P3) | Team 2 = GREEN (P2) + BLUE (P4) */
+export function getTeamId(slot: PlayerSlot): TeamId {
+  return slot === 'P1' || slot === 'P3' ? 'TEAM_1' : 'TEAM_2';
+}
+
+export function getTeamIdForUid(uid: string, slotMap: Record<string, PlayerSlot>): TeamId | null {
+  const slot = slotMap[uid];
+  return slot ? getTeamId(slot) : null;
+}
+
+/**
+ * In 2v2 Tag-Team mode a team wins only when BOTH partners have brought
+ * every required token home. Returns the winning team id or null.
+ */
+export function getWinningTeam(
+  tokens: GameDocument['tokens'],
+  slotMap: Record<string, PlayerSlot>,
+  tokensToWin: number = TOKENS_PER_PLAYER
+): TeamId | null {
+  const teams: Record<TeamId, { total: number; finished: number }> = {
+    TEAM_1: { total: 0, finished: 0 },
+    TEAM_2: { total: 0, finished: 0 },
+  };
+
+  for (const uid of Object.keys(tokens)) {
+    const slot = slotMap[uid];
+    if (!slot) continue;
+    const team = getTeamId(slot);
+    teams[team].total += 1;
+    if (hasPlayerWon(uid, tokens, tokensToWin)) teams[team].finished += 1;
+  }
+
+  for (const teamId of ['TEAM_1', 'TEAM_2'] as TeamId[]) {
+    const t = teams[teamId];
+    if (t.total > 0 && t.finished === t.total) return teamId;
+  }
+  return null;
+}
+
+/**
+ * Returns every uid on the winning team (used for rankings / result screen).
+ */
+export function getTeamMemberUids(
+  teamId: TeamId,
+  slotMap: Record<string, PlayerSlot>
+): string[] {
+  return Object.keys(slotMap)
+    .filter((uid) => getTeamId(slotMap[uid]) === teamId)
+    .sort((a, b) => slotMap[a].localeCompare(slotMap[b]));
 }
 
 /**
@@ -152,9 +223,10 @@ export function calculateTokenMove(
 
   // Check blockade rule along the path if enabled
   if (settings.allowBlockades && targetZone === 'TRACK') {
-    // Check if opponent has 2+ tokens on destination
+    // A blockade is formed by 2+ opponent tokens standing on the destination cell.
     const targetGlobalIdx = getGlobalTrackIndex(slot, targetProgress);
     if (targetGlobalIdx !== null) {
+      let blockingTokens = 0;
       for (const [otherUid, playerTokens] of Object.entries(allTokens)) {
         if (otherUid === uid) continue;
         const otherSlot = slotMap[otherUid];
@@ -165,23 +237,23 @@ export function calculateTokenMove(
           continue;
         }
 
-        let tokensOnCell = 0;
         for (const t of Object.values(playerTokens)) {
           if (t.zone === 'TRACK' && getGlobalTrackIndex(otherSlot, t.progress) === targetGlobalIdx) {
-            tokensOnCell++;
+            blockingTokens++;
           }
         }
-        if (tokensOnCell >= 2 && !isSafeTrackIndex(targetGlobalIdx)) {
-          return {
-            canMove: false,
-            reason: 'Destination is blocked by opponent blockade',
-            newZone: token.zone,
-            newProgress: token.progress,
-            capturedTokens: [],
-            isHome: false,
-            grantsExtraTurn: false,
-          };
-        }
+      }
+
+      if (blockingTokens >= 2 && !isSafeTrackIndex(targetGlobalIdx)) {
+        return {
+          canMove: false,
+          reason: 'Destination is blocked by opponent blockade',
+          newZone: token.zone,
+          newProgress: token.progress,
+          capturedTokens: [],
+          isHome: false,
+          grantsExtraTurn: false,
+        };
       }
     }
   }
