@@ -43,9 +43,12 @@ export function extractMatchStats(data: MatchSummaryData): {
     const tokensHome = tokensList.filter((t) => t.zone === 'HOME').length;
     const tokensTotal = tokensList.length || 4;
 
-    // Sixes and captures from player or room metadata
-    const sixesRolled = p?.sixesRolled || Math.floor(Math.random() * 4) + (isWinner ? 3 : 1);
-    const capturesMade = p?.capturesMade || (isWinner ? Math.floor(Math.random() * 3) + 1 : Math.floor(Math.random() * 2));
+    // Real counters only: the engine keeps them in `game.stats` (per match) and
+    // the room player document mirrors them. Never invent numbers - a scorecard
+    // that lies about sixes/captures breaks trust in the result.
+    const engineStats = game.stats?.[uid];
+    const sixesRolled = engineStats?.sixesRolled ?? p?.sixesRolled ?? 0;
+    const capturesMade = engineStats?.capturesMade ?? p?.capturesMade ?? 0;
 
     const rankingEntry = game.rankings?.find((r) => r.uid === uid);
     const rank = isWinner ? 1 : rankingEntry ? rankingEntry.rank : idx + 2;
