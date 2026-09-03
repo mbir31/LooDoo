@@ -286,6 +286,12 @@ export const BoardToken: React.FC<BoardTokenProps> = ({
     <motion.div
       key={`${uid}-${tokenId}-${animationState?.key || 'static'}`}
       id={`token-${uid}-${tokenId}`}
+      data-testid={`token-${uid}-${tokenId}`}
+      data-movable={isMovable ? 'true' : 'false'}
+      data-zone={zone}
+      data-progress={progress}
+      aria-label={`${color} token ${tokenId + 1}`}
+      role={isMovable ? 'button' : undefined}
       className="absolute z-20 flex items-center justify-center cursor-pointer pointer-events-auto touch-manipulation"
       style={{
         width: cellPercent,

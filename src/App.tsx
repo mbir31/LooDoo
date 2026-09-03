@@ -30,10 +30,13 @@ import {
   subscribeToRoom,
   subscribeToPlayers,
   subscribeToGame,
+  subscribeToSyncErrors,
   reconnectFirestoreAndSync,
 } from './services/gameService';
 import { p2pMeshService } from './services/p2pMeshService';
-import { getLegalMoves, hasPlayerWon, countTokensHome } from './game-engine/engine';
+import { getLegalMoves, countTokensHome } from './game-engine/engine';
+import { chooseBestToken } from './game-engine/ai';
+import { GameRuleError } from './game-engine/reducer';
 import { getTranslation } from './i18n/translations';
 import { soundFx } from './utils/sound';
 
@@ -79,6 +82,21 @@ import {
   CheckCircle2,
   AlertCircle,
 } from 'lucide-react';
+
+/** Translation keys that may be thrown by the engine / transport layer. */
+const LOCALISED_ERROR_KEYS = [
+  'errorRoomNotFound',
+  'errorRoomFull',
+  'errorGameAlreadyStarted',
+  'errorNotAdmin',
+  'errorNotYourTurn',
+  'errorInvalidMove',
+  'errorActionTimeout',
+  'errorStaleState',
+  'errorGameNotFound',
+  'errorDiceAlreadyRolled',
+  'errorMinimumPlayers',
+] as const;
 
 export default function App() {
   const [user, setUser] = useState<UserProfile>(() => getLocalGuestProfile());
@@ -141,6 +159,30 @@ export default function App() {
   const [initialJoinCode, setInitialJoinCode] = useState('');
 
   const [authError, setAuthError] = useState<string | null>(null);
+  const [syncIssue, setSyncIssue] = useState<string | null>(null);
+
+  /** Turns engine / transport errors into localised UI messages. */
+  const localizeError = (err: unknown): string => {
+    const code = (err as GameRuleError)?.code;
+    const message = (err as Error)?.message;
+    if (code && (LOCALISED_ERROR_KEYS as readonly string[]).includes(code)) {
+      return getTranslation(language, code as (typeof LOCALISED_ERROR_KEYS)[number]);
+    }
+    if (message && (LOCALISED_ERROR_KEYS as readonly string[]).includes(message)) {
+      return getTranslation(language, message as (typeof LOCALISED_ERROR_KEYS)[number]);
+    }
+    return message || getTranslation(language, 'errorActionTimeout');
+  };
+
+  // Surface transport failures instead of silently diverging from the room.
+  useEffect(() => {
+    return subscribeToSyncErrors(({ message }) => {
+      if (/permission-denied|Missing or insufficient/i.test(message)) {
+        setSyncIssue(getTranslation(language, 'errorSyncIssue'));
+      }
+      setTimeout(() => setSyncIssue(null), 5000);
+    });
+  }, [language]);
 
   // 1. Initial Authentication & Profile Sync
   useEffect(() => {
@@ -284,131 +326,173 @@ export default function App() {
     );
   }, [game, user, slotMap, room]);
 
+  // Latest-value refs: the bot driver must not re-schedule on every snapshot,
+  // otherwise the timer is cleared before it can ever fire (bot stalls forever).
+  const gameRef = useRef(game);
+  const roomRef = useRef(room);
+  const playersRef = useRef(players);
+  const slotMapRef = useRef(slotMap);
+  const botBusyRef = useRef(false);
+
+  useEffect(() => {
+    gameRef.current = game;
+    roomRef.current = room;
+    playersRef.current = players;
+    slotMapRef.current = slotMap;
+  }, [game, room, players, slotMap]);
+
   // Automated System Bot Logic - Fast & Snappy (< 350ms)
   useEffect(() => {
     if (!game || !room || !user) return;
-    if (room.status !== 'PLAYING' || game.winnerUid) return;
+    if (room.status !== 'PLAYING' || game.winnerUid || game.status === 'GAME_OVER') return;
 
     const currentUid = game.currentPlayerUid;
-    const isBotTurn = currentUid.startsWith('bot_');
-    if (!isBotTurn) return;
+    if (!currentUid.startsWith('bot_')) return;
 
-    // Room admin triggers bot moves
+    // Only the room admin drives the bots so they cannot act twice.
     if (room.adminUid !== user.uid) return;
+    if (botBusyRef.current) return;
 
-    let timer: NodeJS.Timeout;
+    const isRollPhase =
+      (game.status === 'AWAITING_ROLL' || game.status === 'EXTRA_ROLL') && !game.diceRolled;
+    const isMovePhase =
+      game.status === 'AWAITING_TOKEN_SELECTION' && game.diceRolled && game.diceValue !== null;
 
-    // Phase 1: Automated bot rolls the dice (Fast 300ms)
-    if (
-      (game.status === 'AWAITING_ROLL' || game.status === 'EXTRA_ROLL') &&
-      !game.diceRolled
-    ) {
-      timer = setTimeout(async () => {
-        try {
-          const botPlayer = players[currentUid];
-          const botProfile = {
-            uid: currentUid,
-            displayName: botPlayer?.displayName || 'Robot 🤖',
-            avatar: botPlayer?.avatar || '🤖',
-          } as UserProfile;
+    if (!isRollPhase && !isMovePhase) return;
 
+    botBusyRef.current = true;
+
+    const timer = setTimeout(async () => {
+      try {
+        const currentGame = gameRef.current;
+        const currentRoom = roomRef.current;
+        if (!currentGame || !currentRoom) return;
+
+        const botPlayer = playersRef.current[currentUid];
+        const botProfile = {
+          uid: currentUid,
+          displayName: botPlayer?.displayName || 'Robot 🤖',
+          avatar: botPlayer?.avatar || '🤖',
+        } as UserProfile;
+
+        if (isRollPhase) {
           soundFx.diceRoll();
-          const res = await serviceRollDice(room.roomId, game.gameId, botProfile, game.version);
-          if (res?.updatedGame) {
-            setGame(res.updatedGame);
-          }
-        } catch (err: any) {
-          console.warn('Automated bot roll notice:', err?.message || err);
-        }
-      }, 300);
-    }
-
-    // Phase 2: Automated bot chooses best token and moves (Fast 250ms)
-    else if (
-      game.status === 'AWAITING_TOKEN_SELECTION' &&
-      game.diceRolled &&
-      game.diceValue !== null
-    ) {
-      timer = setTimeout(async () => {
-        try {
-          const botSlot = slotMap[currentUid] || 'P2';
-          const botLegalMoves = getLegalMoves(
-            currentUid,
-            botSlot,
-            game.diceValue!,
-            game.tokens,
-            slotMap,
-            room.settings
-          );
-
-          if (botLegalMoves.length === 0) return;
-
-          // AI Heuristic to choose optimal move
-          let bestTokenId = botLegalMoves[0];
-          let bestScore = -1;
-
-          for (const tId of botLegalMoves) {
-            const token =
-              game.tokens[currentUid]?.[tId.toString()] ||
-              game.tokens[currentUid]?.[tId];
-            if (!token) continue;
-            let score = 10;
-            if (token.zone === 'YARD' && game.diceValue === 6) {
-              score = 300; // Unlock new piece
-            } else if (token.zone === 'HOME_PATH') {
-              if (token.progress + game.diceValue === 56) {
-                score = 1000; // Enters Home!
-              } else {
-                score = 400 + token.progress;
-              }
-            } else if (token.zone === 'TRACK') {
-              score = 60 + token.progress;
-            }
-            if (score > bestScore) {
-              bestScore = score;
-              bestTokenId = tId;
-            }
-          }
-
-          const botPlayer = players[currentUid];
-          const botProfile = {
-            uid: currentUid,
-            displayName: botPlayer?.displayName || 'Robot 🤖',
-          } as UserProfile;
-
-          const res = await serviceMoveToken(
-            room.roomId,
-            game.gameId,
+          const res = await serviceRollDice(
+            currentRoom.roomId,
+            currentGame.gameId,
             botProfile,
-            bestTokenId,
-            game.version
+            currentGame.version
           );
-          if (res?.updatedGame) {
-            setGame(res.updatedGame);
-          }
-        } catch (err: any) {
-          console.warn('Automated bot move notice:', err?.message || err);
+          if (res?.updatedGame) setGame(res.updatedGame);
+          return;
         }
-      }, 250);
-    }
 
-    return () => clearTimeout(timer);
-  }, [game, room, user, players, slotMap]);
+        // Phase 2: the AI picks a token using the shared engine helpers.
+        const botCtx = {
+          settings: currentRoom.settings,
+          slotMap: slotMapRef.current,
+          nameMap: Object.fromEntries(
+            Object.values(playersRef.current).map((p) => [p.uid, p.displayName])
+          ),
+          now: Date.now(),
+        };
+        const bestTokenId = chooseBestToken(
+          currentGame,
+          botCtx,
+          currentUid,
+          currentGame.diceValue!
+        );
+        if (bestTokenId === null) return;
 
-  // Automated Turn Timeout auto-advance (Triggered by room admin if current player is inactive)
+        const res = await serviceMoveToken(
+          currentRoom.roomId,
+          currentGame.gameId,
+          botProfile,
+          bestTokenId,
+          currentGame.version
+        );
+        if (res?.updatedGame) setGame(res.updatedGame);
+      } catch (err: any) {
+        console.warn('Automated bot action notice:', err?.message || err);
+      } finally {
+        botBusyRef.current = false;
+      }
+    }, isRollPhase ? 320 : 260);
+
+    return () => {
+      clearTimeout(timer);
+      botBusyRef.current = false;
+    };
+    // Intentionally keyed on primitives only: the latest values are read from refs.
+  }, [
+    game?.gameId,
+    game?.status,
+    game?.version,
+    game?.currentPlayerUid,
+    game?.diceRolled,
+    game?.diceValue,
+    game?.winnerUid,
+    room?.roomId,
+    room?.status,
+    room?.adminUid,
+    user?.uid,
+  ]);
+
+  // Automated Turn Timeout auto-advance.
+  // Only the room admin (or the player owning the turn) may advance a stalled
+  // turn: if every client did it, four clients would race to skip the same turn.
   useEffect(() => {
     if (!game || !room || !user || game.status === 'GAME_OVER' || room.status !== 'PLAYING') return;
-    if (room.adminUid !== user.uid) return;
 
-    const remainingMs = Math.max(100, game.turnExpiresAt - Date.now() + 500);
+    const isAdmin = room.adminUid === user.uid;
+    const isTurnOwner = game.currentPlayerUid === user.uid;
+    if (!isAdmin && !isTurnOwner) return;
+
+    const remainingMs = Math.max(250, game.turnExpiresAt - Date.now() + 500);
     const timer = setTimeout(() => {
       if (Date.now() >= game.turnExpiresAt && game.status !== 'GAME_OVER') {
-        handleTurnTimeout(room.roomId, game.gameId).catch(() => {});
+        handleTurnTimeout(room.roomId, game.gameId, user.uid).catch(() => {});
       }
     }, remainingMs);
 
     return () => clearTimeout(timer);
-  }, [game?.turnExpiresAt, game?.turnNumber, game?.status, room?.roomId, room?.adminUid, user?.uid]);
+  }, [
+    game?.turnExpiresAt,
+    game?.turnNumber,
+    game?.status,
+    game?.currentPlayerUid,
+    room?.roomId,
+    room?.status,
+    room?.adminUid,
+    user?.uid,
+  ]);
+
+  // Award XP / trophies / streaks once per finished match (real match counters).
+  const awardedGameRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!game || !user || game.status !== 'GAME_OVER' || !game.winnerUid) return;
+    if (awardedGameRef.current === game.gameId) return;
+    awardedGameRef.current = game.gameId;
+
+    const myStats = game.stats?.[user.uid];
+    const didWin = game.winnerUid === user.uid;
+
+    awardMatchStats(user, {
+      won: didWin,
+      sixesRolled: myStats?.sixesRolled ?? 0,
+      capturesMade: myStats?.capturesMade ?? 0,
+      gameMode: room?.settings?.gameMode || game.gameMode,
+    })
+      .then((updated) => setUser(updated))
+      .catch(() => {});
+  }, [game?.gameId, game?.status, game?.winnerUid, room?.settings?.gameMode, user]);
+
+  // Reset the award guard whenever a brand new match starts.
+  useEffect(() => {
+    if (game && game.status !== 'GAME_OVER') {
+      awardedGameRef.current = null;
+    }
+  }, [game?.gameId, game?.status]);
 
   // Handlers
   const handlePlayAlone = async () => {
@@ -425,7 +509,7 @@ export default function App() {
       setCurrentRoomId(result.roomId);
     } catch (err: any) {
       console.error('Play alone failed:', err);
-      setSoloError(err.message || 'Could not start solo game');
+      setSoloError(localizeError(err));
     } finally {
       setSoloLoading(false);
     }
@@ -444,7 +528,7 @@ export default function App() {
       setCurrentRoomId(result.roomId);
     } catch (err: any) {
       console.error('Play Snake & Ladder alone failed:', err);
-      setSoloError(err.message || 'Could not start Snake & Ladder game');
+      setSoloError(localizeError(err));
     } finally {
       setSoloLoading(false);
     }
@@ -489,13 +573,7 @@ export default function App() {
       setCurrentRoomId(result.roomId);
       setQuickRoomCode('');
     } catch (err: any) {
-      if (err.message === 'errorRoomNotFound') {
-        setQuickJoinError(getTranslation(language, 'errorRoomNotFound'));
-      } else if (err.message === 'errorRoomFull') {
-        setQuickJoinError(getTranslation(language, 'errorRoomFull'));
-      } else {
-        setQuickJoinError(err.message || 'Failed to join room');
-      }
+      setQuickJoinError(localizeError(err));
     } finally {
       setQuickJoinLoading(false);
     }
@@ -522,7 +600,7 @@ export default function App() {
         setGame(res.updatedGame);
       }
     } catch (err: any) {
-      setActionError(err.message || 'Failed to roll dice');
+      setActionError(localizeError(err));
     } finally {
       setIsRolling(false);
     }
@@ -546,7 +624,7 @@ export default function App() {
         setGame(res.updatedGame);
       }
     } catch (err: any) {
-      setActionError(err.message || 'Failed to move token');
+      setActionError(localizeError(err));
     }
   };
 
@@ -719,6 +797,17 @@ export default function App() {
         </div>
       ) : null}
 
+      {/* Persistence warning: gameplay continues locally, the server rejected a write */}
+      {syncIssue && (
+        <div
+          id="sync-issue-banner"
+          className="bg-red-950/95 border-b border-red-600/60 text-red-100 px-3 sm:px-4 py-2 text-xs flex items-center justify-center gap-2 sticky top-0 z-50 backdrop-blur-md"
+        >
+          <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+          <span className="font-semibold">{syncIssue}</span>
+        </div>
+      )}
+
       {/* Main Container */}
       <main className="flex-1 w-full max-w-6xl mx-auto p-2 sm:p-4 md:p-6 flex flex-col justify-center">
         {/* VIEW 1: Active Game Board Screen */}
@@ -784,6 +873,7 @@ export default function App() {
                     currentPlayerUid={game.currentPlayerUid}
                     myUid={user.uid}
                     legalMoves={legalMoves}
+                    settings={room.settings}
                     onTokenClick={handleTokenClick}
                   />
                 )}
@@ -895,6 +985,7 @@ export default function App() {
                     currentPlayerUid={game.currentPlayerUid}
                     myUid={user.uid}
                     legalMoves={legalMoves}
+                    settings={room.settings}
                     onTokenClick={handleTokenClick}
                   />
                 )}

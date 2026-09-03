@@ -6,6 +6,7 @@ import {
   TokenZone,
   GameDocument,
   RoomPlayer,
+  RoomSettings,
   TokenTheme,
 } from '../../types';
 import {
@@ -25,6 +26,8 @@ interface LudoBoardProps {
   onTokenClick: (tokenId: number) => void;
   disabled?: boolean;
   userTokenTheme?: TokenTheme;
+  /** Room rules used for the ghost landing preview (blockades, team mode...). */
+  settings?: RoomSettings;
 }
 
 const COLOR_MAP: Record<PlayerColor, {
@@ -103,6 +106,7 @@ export const LudoBoard: React.FC<LudoBoardProps> = ({
   onTokenClick,
   disabled = false,
   userTokenTheme = 'classic',
+  settings,
 }) => {
   const isMyTurn = currentPlayerUid === myUid;
   const isAwaitingTokenSelection = game.status === 'AWAITING_TOKEN_SELECTION';
@@ -250,8 +254,10 @@ export const LudoBoard: React.FC<LudoBoardProps> = ({
     if (!token) return null;
     const mySlot = slotMap[myUid] || 'P1';
 
-    const dummySettings = {
-      maxPlayers: 4 as 4,
+    // The preview must follow the real room rules, otherwise it can advertise
+    // a move the engine would reject (e.g. onto a blockade).
+    const previewSettings: RoomSettings = settings || {
+      maxPlayers: 4,
       turnTimeoutSeconds: 30,
       strictThreeSixRule: true,
       allowBlockades: false,
@@ -265,9 +271,9 @@ export const LudoBoard: React.FC<LudoBoardProps> = ({
       game.diceValue,
       game.tokens,
       slotMap,
-      dummySettings
+      previewSettings
     );
-  }, [isMyTurn, isAwaitingTokenSelection, activePreviewTokenId, game, myUid, slotMap]);
+  }, [isMyTurn, isAwaitingTokenSelection, activePreviewTokenId, game, myUid, slotMap, settings]);
 
   // Visual Effect Triggers: Capture Blast & Home Entrance
   const [captureFx, setCaptureFx] = useState<{ x: number; y: number } | null>(null);
@@ -319,6 +325,8 @@ export const LudoBoard: React.FC<LudoBoardProps> = ({
   return (
     <div
       id="loodoo-board-container"
+      data-testid="loodoo-board"
+      data-legal-moves={legalMoves.join(',')}
       className="relative w-full max-w-[min(96vw,520px)] aspect-square mx-auto rounded-2xl sm:rounded-3xl p-2 sm:p-3.5 bg-gradient-to-b from-neutral-900 via-neutral-950 to-black shadow-2xl select-none touch-manipulation border-2 sm:border-4 border-neutral-800 ring-1 ring-neutral-700/50"
       style={{
         boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.9), inset 0 2px 4px rgba(255, 255, 255, 0.1)',

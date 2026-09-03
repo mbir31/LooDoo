@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   PlayerColor,
@@ -7,17 +7,19 @@ import {
   Language,
   RoomPlayer,
   GameDocument,
+  RoomSettings,
   UserProfile,
 } from '../../types';
 import { getTranslation } from '../../i18n/translations';
 import {
-  calculateTokenMove,
-  getLegalMoves,
-  hasPlayerWon,
-  countTokensHome,
-  createInitialTokens,
-  getTokenGridCoordinates,
-} from '../../game-engine/engine';
+  applyRollDice,
+  applyTokenMove,
+  canRoll,
+  createGameDocument,
+  GameContext,
+  getLegalMovesForCurrentPlayer,
+} from '../../game-engine/reducer';
+import { chooseBestToken } from '../../game-engine/ai';
 import { soundFx } from '../../utils/sound';
 import { LudoBoard } from '../board/LudoBoard';
 import { SnakeLadderBoard, LADDERS_MAP, SNAKES_MAP } from '../board/SnakeLadderBoard';
@@ -65,33 +67,29 @@ export const PassAndPlayGame: React.FC<PassAndPlayGameProps> = ({
   currentUser,
 }) => {
   // Setup Stage State
-  const [isPlaying, setIsPlaying] = useState(false);
   const [playerCount, setPlayerCount] = useState<2 | 3 | 4>(4);
   const [selectedMode, setSelectedMode] = useState<GameMode>('CLASSIC');
   const [autoMoveSingle, setAutoMoveSingle] = useState(true);
   const [playersList, setPlayersList] = useState<LocalPlayerConfig[]>(DEFAULT_PLAYERS_CONFIG);
 
-  // Active Game State
-  const [currentTurnIndex, setCurrentTurnIndex] = useState(0);
-  const [diceValue, setDiceValue] = useState<number | null>(null);
-  const [diceRolled, setDiceRolled] = useState(false);
+  // -------------------------------------------------------------------------
+  // Authoritative game state. Offline pass-and-play uses the very same
+  // reducer as online multiplayer and the AI bots, so the rules can never
+  // drift apart. `isRolling` is pure presentation state and lives outside it.
+  // -------------------------------------------------------------------------
+  const [game, setGame] = useState<GameDocument | null>(null);
   const [isRolling, setIsRolling] = useState(false);
-  const [consecutiveSixes, setConsecutiveSixes] = useState(0);
-  const [winnerUid, setWinnerUid] = useState<string | null>(null);
-  const [rankings, setRankings] = useState<Array<{ uid: string; rank: number }>>([]);
-  const [turnMessage, setTurnMessage] = useState<{ bn: string; en: string; type: any } | null>(null);
 
-  // Ludo Mode Tokens: [uid] -> { [tokenId]: { id, zone, progress } }
-  const [tokens, setTokens] = useState<GameDocument['tokens']>({});
-
-  // Snake & Ladders Positions: [uid] -> 1..100
-  const [snakePositions, setSnakePositions] = useState<Record<string, number>>({});
-  const [snakeLastEvent, setSnakeLastEvent] = useState<{
-    type: 'LADDER' | 'SNAKE' | 'NORMAL';
-    from: number;
-    to: number;
-    uid: string;
-  } | null>(null);
+  const isPlaying = game !== null;
+  const diceValue = game?.diceValue ?? null;
+  const diceRolled = game?.diceRolled ?? false;
+  const consecutiveSixes = game?.consecutiveSixes ?? 0;
+  const winnerUid = game?.winnerUid ?? null;
+  const rankings = game?.rankings ?? [];
+  const turnMessage = game?.turnMessage ?? null;
+  const tokens = game?.tokens ?? {};
+  const snakePositions = game?.snakePositions ?? {};
+  const snakeLastEvent = game?.snakeLastEvent ?? null;
 
   // Setup initial player records
   const activePlayers = useMemo(() => {
@@ -102,7 +100,7 @@ export const PassAndPlayGame: React.FC<PassAndPlayGameProps> = ({
     return activePlayers.map((p) => p.slot);
   }, [activePlayers]);
 
-  const currentSlot = playerOrder[currentTurnIndex] || 'P1';
+  const currentSlot: PlayerSlot = (game?.currentPlayerUid as PlayerSlot) || playerOrder[0] || 'P1';
   const currentPlayer = activePlayers.find((p) => p.slot === currentSlot) || activePlayers[0];
 
   const playersMap = useMemo(() => {
@@ -133,324 +131,168 @@ export const PassAndPlayGame: React.FC<PassAndPlayGameProps> = ({
     return map;
   }, [activePlayers]);
 
-  // Start the Local Game
+  /** Room rules for this local match - identical shape to online rooms. */
+  const settings: RoomSettings = useMemo(
+    () => ({
+      maxPlayers: playerCount,
+      turnTimeoutSeconds: 30,
+      strictThreeSixRule: true,
+      allowBlockades: true,
+      customNamesAllowed: true,
+      gameMode: selectedMode,
+      tokensToWin: selectedMode === 'RUSH' ? 2 : 4,
+      autoMoveSingle,
+    }),
+    [playerCount, selectedMode, autoMoveSingle]
+  );
+
+  const buildCtx = useCallback(
+    (now: number = Date.now()): GameContext => ({
+      settings,
+      slotMap,
+      nameMap: Object.fromEntries(activePlayers.map((p) => [p.slot, p.name])),
+      now,
+    }),
+    [settings, slotMap, activePlayers]
+  );
+
+  // Latest state ref, so delayed (animated) actions never act on stale state.
+  const gameRef = useRef<GameDocument | null>(null);
+  useEffect(() => {
+    gameRef.current = game;
+  }, [game]);
+
+  /** Start (or restart) the local match. */
   const handleStartGame = () => {
     soundFx.click();
-    const initialTokens = createInitialTokens(playerOrder);
-    setTokens(initialTokens);
-
-    const initSnakes: Record<string, number> = {};
-    playerOrder.forEach((slot) => {
-      initSnakes[slot] = 1;
-    });
-    setSnakePositions(initSnakes);
-
-    setCurrentTurnIndex(0);
-    setDiceValue(null);
-    setDiceRolled(false);
-    setConsecutiveSixes(0);
-    setWinnerUid(null);
-    setRankings([]);
-    setTurnMessage(null);
-    setIsPlaying(true);
+    const now = Date.now();
+    setIsRolling(false);
+    setGame(
+      createGameDocument({
+        gameId: `local_${now}`,
+        roomId: 'local_room',
+        playerOrder,
+        settings,
+        now,
+      })
+    );
   };
 
-  // Calculate tokens to win
-  const tokensToWin = useMemo(() => {
-    if (selectedMode === 'RUSH') return 2;
-    if (selectedMode === 'TEAM') return 4;
-    return 4;
-  }, [selectedMode]);
-
-  // Calculate Legal Moves for active turn
+  /** Legal moves for the player on turn (same helper as the online board). */
   const legalMoves = useMemo(() => {
-    if (!isPlaying || !diceRolled || diceValue === null || selectedMode === 'SNAKE_LADDER') {
-      return [];
+    if (!game) return [];
+    return getLegalMovesForCurrentPlayer(game, buildCtx());
+  }, [game, buildCtx]);
+
+  /** Audio / haptic feedback derived from the state transition. */
+  const playRollFeedback = (next: GameDocument, dice: number) => {
+    if (next.status === 'GAME_OVER') {
+      soundFx.win();
+      return;
     }
-
-    return getLegalMoves(
-      currentSlot,
-      currentSlot,
-      diceValue,
-      tokens,
-      slotMap,
-      {
-        maxPlayers: playerCount,
-        turnTimeoutSeconds: 30,
-        strictThreeSixRule: true,
-        allowBlockades: true,
-        customNamesAllowed: true,
-        gameMode: selectedMode,
-        tokensToWin,
-        autoMoveSingle,
-      }
-    );
-  }, [isPlaying, diceRolled, diceValue, selectedMode, currentSlot, tokens, slotMap, playerCount, tokensToWin, autoMoveSingle]);
-
-  // Auto-move single legal move if enabled
-  useEffect(() => {
-    if (
-      isPlaying &&
-      diceRolled &&
-      diceValue !== null &&
-      autoMoveSingle &&
-      selectedMode !== 'SNAKE_LADDER' &&
-      legalMoves.length === 1 &&
-      !winnerUid
-    ) {
-      const timer = setTimeout(() => {
-        handleMoveToken(legalMoves[0]);
-      }, 550);
-      return () => clearTimeout(timer);
+    if (next.lastAction === 'THREE_SIX_PENALTY' || next.lastAction === 'SNAKE_EXCEED_100') {
+      soundFx.penalty();
+      return;
     }
-  }, [isPlaying, diceRolled, diceValue, autoMoveSingle, selectedMode, legalMoves, winnerUid]);
-
-  // Advance to next player
-  const advanceTurn = () => {
-    setDiceValue(null);
-    setDiceRolled(false);
-    setConsecutiveSixes(0);
-
-    const total = playerOrder.length;
-    let nextIdx = (currentTurnIndex + 1) % total;
-
-    // Check if player has already won
-    if (selectedMode !== 'SNAKE_LADDER') {
-      for (let i = 0; i < total; i++) {
-        const checkSlot = playerOrder[nextIdx];
-        if (!hasPlayerWon(checkSlot, tokens, tokensToWin)) {
-          break;
-        }
-        nextIdx = (nextIdx + 1) % total;
-      }
+    if (next.snakeLastEvent?.type === 'LADDER') {
+      soundFx.ladderClimb();
+      return;
     }
-
-    setCurrentTurnIndex(nextIdx);
-    soundFx.myTurn();
+    if (next.snakeLastEvent?.type === 'SNAKE') {
+      soundFx.snakeBite();
+      return;
+    }
+    if (dice === 6) {
+      soundFx.sixRolled();
+      return;
+    }
+    if (next.lastAction === 'NO_LEGAL_MOVES') {
+      soundFx.penalty();
+      return;
+    }
+    soundFx.tokenMoveSequence(dice);
   };
 
   // Roll Dice
   const handleRollDice = () => {
-    if (isRolling || diceRolled || winnerUid) return;
+    const current = gameRef.current;
+    if (!current || isRolling || winnerUid) return;
+    if (!canRoll(current, currentSlot)) return;
+
     soundFx.diceRoll();
     setIsRolling(true);
 
+    // Presentation delay only: the state transition itself is synchronous.
     setTimeout(() => {
-      const val = Math.floor(Math.random() * 6) + 1;
-      setDiceValue(val);
-      setIsRolling(false);
-      setDiceRolled(true);
-
-      // Handle Snake & Ladders mode roll
-      if (selectedMode === 'SNAKE_LADDER') {
-        const curPos = snakePositions[currentSlot] || 1;
-        let newPos = curPos + val;
-
-        // Exact roll needed to land on 100
-        if (newPos > 100) {
-          soundFx.penalty();
-          setTurnMessage({
-            bn: '১০০ অতিক্রম করা যাবে না! চাল অপরিবর্তিত রইল।',
-            en: 'Cannot exceed 100! Turn passes.',
-            type: 'penalty',
-          });
-          setTimeout(advanceTurn, 1200);
-          return;
-        }
-
-        let eventType: 'LADDER' | 'SNAKE' | 'NORMAL' = 'NORMAL';
-        let finalPos = newPos;
-
-        if (LADDERS_MAP[newPos]) {
-          finalPos = LADDERS_MAP[newPos];
-          eventType = 'LADDER';
-          soundFx.ladderClimb();
-        } else if (SNAKES_MAP[newPos]) {
-          finalPos = SNAKES_MAP[newPos];
-          eventType = 'SNAKE';
-          soundFx.snakeBite();
-        } else {
-          soundFx.tokenMoveSequence(val);
-        }
-
-        setSnakePositions((prev) => ({ ...prev, [currentSlot]: finalPos }));
-        setSnakeLastEvent({ type: eventType, from: newPos, to: finalPos, uid: currentSlot });
-
-        if (finalPos === 100) {
-          soundFx.win();
-          setWinnerUid(currentSlot);
-          return;
-        }
-
-        // Grant extra roll on 6
-        if (val === 6) {
-          soundFx.sixRolled();
-          setDiceRolled(false);
-          setDiceValue(null);
-        } else {
-          setTimeout(advanceTurn, 1200);
-        }
+      const live = gameRef.current;
+      if (!live) {
+        setIsRolling(false);
         return;
       }
-
-      // Classic / Rush / Team Ludo Consecutive 6 rule
-      if (val === 6) {
-        soundFx.sixRolled();
-        const nextSixCount = consecutiveSixes + 1;
-        setConsecutiveSixes(nextSixCount);
-
-        if (nextSixCount >= 3) {
-          soundFx.penalty();
-          setTurnMessage({
-            bn: 'টানা ৩টি ছক্কা! চাল বাতিল করা হলো।',
-            en: 'Three consecutive 6s! Turn cancelled.',
-            type: 'penalty',
-          });
-          setTimeout(advanceTurn, 1400);
-          return;
-        }
-      } else {
-        setConsecutiveSixes(0);
-      }
-
-      // Calculate legal moves
-      const availableMoves = getLegalMoves(
-        currentSlot,
-        currentSlot,
-        val,
-        tokens,
-        slotMap,
-        {
-          maxPlayers: playerCount,
-          turnTimeoutSeconds: 30,
-          strictThreeSixRule: true,
-          allowBlockades: true,
-          customNamesAllowed: true,
-          gameMode: selectedMode,
-          tokensToWin,
-          autoMoveSingle,
-        }
-      );
-
-      if (availableMoves.length === 0) {
-        soundFx.penalty();
-        setTurnMessage({
-          bn: 'কোনো বৈধ চাল নেই! পরবর্তী খেলোয়াড়ের পালা।',
-          en: 'No legal moves available. Turn passing...',
-          type: 'info',
-        });
-        setTimeout(advanceTurn, 1200);
+      const val = Math.floor(Math.random() * 6) + 1;
+      try {
+        const result = applyRollDice(live, buildCtx(), currentSlot, val);
+        setGame(result.game);
+        playRollFeedback(result.game, val);
+      } catch (err) {
+        // The engine rejected the action (e.g. a second roll in the same turn).
+        console.warn('[loodoo] illegal local roll ignored:', (err as Error)?.message);
+      } finally {
+        setIsRolling(false);
       }
     }, 450);
   };
 
   // Move Token
   const handleMoveToken = (tokenId: number) => {
-    if (!diceRolled || diceValue === null || winnerUid) return;
+    const current = gameRef.current;
+    if (!current || winnerUid) return;
+    if (current.status !== 'AWAITING_TOKEN_SELECTION' || current.diceValue === null) return;
 
-    const playerTokens = tokens[currentSlot];
-    if (!playerTokens) return;
-    const token = playerTokens[tokenId.toString()] || playerTokens[tokenId];
-    if (!token) return;
-
-    const move = calculateTokenMove(
-      token,
-      currentSlot,
-      currentSlot,
-      diceValue,
-      tokens,
-      slotMap,
-      {
-        maxPlayers: playerCount,
-        turnTimeoutSeconds: 30,
-        strictThreeSixRule: true,
-        allowBlockades: true,
-        customNamesAllowed: true,
-        gameMode: selectedMode,
-        tokensToWin,
-        autoMoveSingle,
-      }
-    );
-
-    if (!move.canMove) return;
-
-    // Play move sound
-    if (move.newZone === 'HOME') {
-      soundFx.home();
-    } else if (move.capturedTokens.length > 0) {
-      soundFx.capture();
-    } else {
-      soundFx.tokenMoveSequence(diceValue);
-    }
-
-    // Apply token move
-    const nextTokens = { ...tokens };
-    nextTokens[currentSlot] = {
-      ...nextTokens[currentSlot],
-      [tokenId.toString()]: {
-        id: tokenId,
-        zone: move.newZone,
-        progress: move.newProgress,
-      },
-    };
-
-    // Apply Captures
-    move.capturedTokens.forEach((c) => {
-      if (nextTokens[c.uid]) {
-        nextTokens[c.uid] = {
-          ...nextTokens[c.uid],
-          [c.tokenId.toString()]: {
-            id: c.tokenId,
-            zone: 'YARD',
-            progress: -1,
-          },
-        };
-      }
-    });
-
-    setTokens(nextTokens);
-
-    // Check Victory
-    const won = hasPlayerWon(currentSlot, nextTokens, tokensToWin);
-    if (won) {
-      soundFx.win();
-      setWinnerUid(currentSlot);
+    let next: GameDocument;
+    let captured = 0;
+    let reachedHome = false;
+    try {
+      const result = applyTokenMove(current, buildCtx(), currentSlot, tokenId);
+      next = result.game;
+      captured = result.captured.length;
+      reachedHome = result.isHome;
+    } catch (err) {
+      console.warn('[loodoo] illegal local move ignored:', (err as Error)?.message);
       return;
     }
 
-    // Check Extra Turn on 6, capture, or home
-    if (move.grantsExtraTurn) {
-      setDiceRolled(false);
-      setDiceValue(null);
+    setGame(next);
+
+    if (next.status === 'GAME_OVER') {
+      soundFx.win();
+      return;
+    }
+    if (reachedHome) {
+      soundFx.home();
+    } else if (captured > 0) {
+      soundFx.capture();
     } else {
-      advanceTurn();
+      soundFx.tokenMoveSequence(current.diceValue);
     }
   };
 
-  // Mock GameDocument for LudoBoard compatibility
-  const mockGameDoc: GameDocument = {
-    gameId: 'local_pass_play',
-    roomId: 'local_room',
-    gameMode: selectedMode,
-    status: diceRolled ? 'AWAITING_TOKEN_SELECTION' : 'AWAITING_ROLL',
-    playerOrder,
-    currentPlayerUid: currentSlot,
-    turnNumber: 1,
-    diceValue,
-    diceRolled,
-    consecutiveSixes,
-    turnStartedAt: Date.now(),
-    turnExpiresAt: Date.now() + 30000,
-    winnerUid,
-    rankings: rankings.map((r) => ({ uid: r.uid, rank: r.rank, finishedAt: Date.now() })),
-    tokens,
-    version: 1,
-    startedAt: Date.now(),
-    endedAt: winnerUid ? Date.now() : null,
-    lastAction: 'pass_and_play',
-    lastActionAt: Date.now(),
-    turnMessage,
-  };
+  // Auto-move when a single legal move is available (optional quality-of-life).
+  useEffect(() => {
+    if (!game || !autoMoveSingle || selectedMode === 'SNAKE_LADDER') return;
+    if (game.status !== 'AWAITING_TOKEN_SELECTION' || game.winnerUid) return;
+    if (legalMoves.length !== 1) return;
+
+    const timer = setTimeout(() => {
+      handleMoveToken(legalMoves[0]);
+    }, 550);
+    return () => clearTimeout(timer);
+  }, [game?.version, game?.status, legalMoves, autoMoveSingle, selectedMode]);
+
+  const tokensToWin = settings.tokensToWin ?? 4;
+
+  // The real authoritative document is handed to the board / widgets directly.
+  const boardGame: GameDocument = game as GameDocument;
 
   // ================= SETUP SCREEN =================
   if (!isPlaying) {
@@ -653,7 +495,7 @@ export const PassAndPlayGame: React.FC<PassAndPlayGameProps> = ({
         <button
           onClick={() => {
             soundFx.click();
-            setIsPlaying(false);
+            setGame(null);
           }}
           className="p-1.5 sm:p-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-400 hover:text-white transition-colors cursor-pointer flex items-center gap-1 text-xs font-bold"
         >
@@ -703,11 +545,12 @@ export const PassAndPlayGame: React.FC<PassAndPlayGameProps> = ({
             />
           ) : (
             <LudoBoard
-              game={mockGameDoc}
+              game={boardGame}
               players={playersMap}
               currentPlayerUid={currentSlot}
               myUid={currentSlot}
               legalMoves={legalMoves}
+              settings={settings}
               onTokenClick={handleMoveToken}
               disabled={!diceRolled}
               userTokenTheme={currentUser.tokenSkin || 'classic'}
@@ -719,10 +562,11 @@ export const PassAndPlayGame: React.FC<PassAndPlayGameProps> = ({
         <div className="w-full max-w-[340px] flex flex-col gap-3">
           {/* Turn Indicator Banner */}
           <TurnIndicator
-            game={mockGameDoc}
+            game={boardGame}
             players={playersMap}
             myUid={currentSlot}
             language={language}
+            timeoutEnabled={false}
           />
 
           {/* Interactive 3D Dice Component & Quick Soundboard Action */}
@@ -730,7 +574,7 @@ export const PassAndPlayGame: React.FC<PassAndPlayGameProps> = ({
             <DiceComponent
               diceValue={diceValue}
               isRolling={isRolling}
-              canRoll={!diceRolled && !winnerUid && !isRolling}
+              canRoll={canRoll(boardGame, currentSlot) && !isRolling}
               consecutiveSixes={consecutiveSixes}
               playerColor={currentPlayer.color}
               language={language}
@@ -745,7 +589,10 @@ export const PassAndPlayGame: React.FC<PassAndPlayGameProps> = ({
                 }}
               />
               <button
-                onClick={() => setIsPlaying(false)}
+                onClick={() => {
+                  soundFx.click();
+                  setGame(null);
+                }}
                 className="px-3 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-850 text-neutral-300 text-xs font-bold border border-neutral-800 flex items-center gap-1.5 cursor-pointer"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
@@ -766,7 +613,7 @@ export const PassAndPlayGame: React.FC<PassAndPlayGameProps> = ({
                   player={playerRecord}
                   isCurrentTurn={isTurn}
                   isAdmin={false}
-                  game={mockGameDoc}
+                  game={boardGame}
                   language={language}
                   isMe={isTurn}
                 />
@@ -785,7 +632,7 @@ export const PassAndPlayGame: React.FC<PassAndPlayGameProps> = ({
       {/* Result Modal upon Victory */}
       {winnerUid && (
         <GameResultModal
-          game={mockGameDoc}
+          game={boardGame}
           room={{
             roomId: 'pass_and_play',
             roomCode: 'LOCAL',
@@ -809,7 +656,7 @@ export const PassAndPlayGame: React.FC<PassAndPlayGameProps> = ({
           players={playersMap}
           currentUserUid={currentSlot}
           language={language}
-          onBackToLobby={() => setIsPlaying(false)}
+          onBackToLobby={() => setGame(null)}
         />
       )}
     </div>

@@ -82,6 +82,8 @@ export interface RoomPlayer {
   lastSeenAt: number;
   sixesRolled?: number;
   capturesMade?: number;
+  /** Set by a live voice layer (if enabled) to render the speaking indicator. */
+  isSpeaking?: boolean;
 }
 
 export interface RoomSettings {
@@ -116,11 +118,20 @@ export interface PlayerTokens {
   };
 }
 
+/** Per-player counters accumulated during a single match (authoritative, never randomised). */
+export interface PlayerMatchStats {
+  sixesRolled: number;
+  capturesMade: number;
+  tokensHome: number;
+}
+
 export interface GameDocument {
   gameId: string;
   roomId: string;
   gameMode?: GameMode;
   winningTeam?: TeamId | null;
+  /** Real per-player match counters (sixes / captures / tokens home). */
+  stats?: Record<string, PlayerMatchStats>;
   status: GameStatus;
   playerOrder: string[]; // array of uids in turn order
   currentPlayerUid: string;

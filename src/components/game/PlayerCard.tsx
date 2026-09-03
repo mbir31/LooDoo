@@ -96,7 +96,9 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
               </span>
             )}
             {isAdmin && (
-              <Crown className="w-3 h-3 text-amber-400 shrink-0" title="Admin" />
+              <span title="Admin" className="shrink-0 inline-flex">
+                <Crown className="w-3 h-3 text-amber-400" />
+              </span>
             )}
           </div>
 
@@ -113,9 +115,13 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
 
             <div className="flex items-center gap-1">
               {player.connected ? (
-                <Wifi className="w-3 h-3 text-emerald-400" title="Connected" />
+                <span title="Connected" className="inline-flex">
+                  <Wifi className="w-3 h-3 text-emerald-400" />
+                </span>
               ) : (
-                <WifiOff className="w-3 h-3 text-red-400" title="Disconnected" />
+                <span title="Disconnected" className="inline-flex">
+                  <WifiOff className="w-3 h-3 text-red-400" />
+                </span>
               )}
             </div>
           </div>

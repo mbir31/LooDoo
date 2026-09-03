@@ -108,6 +108,8 @@ export const DiceComponent: React.FC<DiceComponentProps> = ({
       <div className="relative flex items-center justify-center py-1">
         <motion.div
           id="loodoo-dice"
+          data-testid="loodoo-dice"
+          data-dice-value={isRolling || animatingRoll ? 'rolling' : (diceValue ?? 'none')}
           className={`w-20 h-20 sm:w-24 sm:h-24 bg-gradient-to-b from-white via-neutral-50 to-neutral-200 rounded-3xl p-2.5 border-4 ${colorStyles.border} shadow-2xl flex items-center justify-center cursor-pointer select-none relative ${colorStyles.glow}`}
           style={{
             transformStyle: 'preserve-3d',

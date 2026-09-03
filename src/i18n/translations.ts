@@ -179,6 +179,11 @@ export const translations = {
     errorNotYourTurn: 'Please wait for your turn.',
     errorInvalidMove: 'Illegal token movement.',
     errorActionTimeout: 'Operation timed out. Please try again.',
+    errorStaleState: 'The board just changed. Please try again.',
+    errorGameNotFound: 'The match could not be found.',
+    errorDiceAlreadyRolled: 'You have already rolled the dice.',
+    errorMinimumPlayers: 'At least 2 players are required to start.',
+    errorSyncIssue: 'Some moves could not be saved to the server. Reconnecting…',
   },
 
   bn: {
@@ -359,6 +364,11 @@ export const translations = {
     errorNotYourTurn: 'অনুগ্রহ করে আপনার চালের জন্য অপেক্ষা করুন।',
     errorInvalidMove: 'এই ঘুঁটিটি চালার নিয়ম নেই।',
     errorActionTimeout: 'সংযোগের সময় শেষ হয়েছে। পুনরায় চেষ্টা করুন।',
+    errorStaleState: 'বোর্ড এইমাত্র পরিবর্তিত হয়েছে। পুনরায় চেষ্টা করুন।',
+    errorGameNotFound: 'এই ম্যাচটি পাওয়া যায়নি।',
+    errorDiceAlreadyRolled: 'আপনি ইতোমধ্যে ডাইস চেলেছেন।',
+    errorMinimumPlayers: 'খেলা শুরু করতে অন্তত ২ জন খেলোয়াড় প্রয়োজন।',
+    errorSyncIssue: 'কিছু চাল সার্ভারে সংরক্ষণ করা যায়নি। পুনরায় সংযোগ করা হচ্ছে…',
   },
 };
 
