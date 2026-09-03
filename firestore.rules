@@ -200,6 +200,34 @@ service cloud.firestore {
         allow update: if false;
       }
 
+      // ------------------- "আওয়াজ দাও" voice clips -------------------------
+      // Ephemeral: a 3 second recording is consumed and deleted straight away.
+      // The payload is capped so the collection can never be used as storage.
+      match /voiceClips/{clipId} {
+        allow read: if signedIn() && isRoomMember(roomId);
+        allow create: if signedIn()
+          && isRoomMember(roomId)
+          && request.resource.data.uid == me()
+          && request.resource.data.keys().hasOnly([
+               'clipId', 'uid', 'displayName', 'avatar', 'mimeType',
+               'durationMs', 'data', 'createdAt'
+             ])
+          && request.resource.data.mimeType in [
+               'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus',
+               'audio/mp4', 'audio/mpeg'
+             ]
+          && request.resource.data.durationMs is int
+          && request.resource.data.durationMs >= 100
+          && request.resource.data.durationMs <= 4000
+          && request.resource.data.data is string
+          && request.resource.data.data.size() <= 32768 // 24 KB of audio
+          && request.resource.data.createdAt is int;
+        // The sender or the admin may clear a clip (and clients delete on read).
+        allow delete: if signedIn()
+          && (resource.data.uid == me() || roomData(roomId).adminUid == me());
+        allow update: if false;
+      }
+
       // ------------------------ WebRTC signalling ---------------------------
       // Firebase is discovery/signalling only: gameplay data and (optionally)
       // audio travel peer to peer over WebRTC data channels.

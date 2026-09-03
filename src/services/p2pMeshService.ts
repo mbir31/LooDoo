@@ -29,6 +29,7 @@ export type P2PMessageType =
   | 'GAME_SYNC'
   | 'DICE_ROLL_START'
   | 'REACTION'
+  | 'VOICE_CLIP'
   | 'PING'
   | 'PONG';
 

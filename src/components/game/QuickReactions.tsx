@@ -1,52 +1,70 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { UserProfile, ReactionEvent } from '../../types';
+import { UserProfile, ReactionEvent, VoiceClip } from '../../types';
 import { sendReaction } from '../../services/gameService';
 import { p2pMeshService } from '../../services/p2pMeshService';
 import { soundFx } from '../../utils/sound';
+import {
+  isGlobalMuted,
+  isPlayerMuted,
+  isVoiceClipSupported,
+  MAX_CLIP_MS,
+  onMuteChange,
+  playVoiceClip,
+  sendVoiceClip,
+  setGlobalMuted,
+  startRecording,
+  stopRecording,
+  subscribeToVoiceClips,
+  VoiceClipError,
+} from '../../services/voiceClipService';
 import { collection, onSnapshot, query, limit, orderBy } from 'firebase/firestore';
 import { db } from '../../firebase/config';
-import { Smile, Volume2, Sparkles, MessageSquare, Play, VolumeX, Flame, Zap } from 'lucide-react';
+import { Mic, Smile, Volume2, VolumeX, Loader2 } from 'lucide-react';
 
 interface QuickReactionsProps {
   roomId?: string;
   user?: UserProfile;
-  onOfflineReaction?: (emoji: string, taunt?: { id: string; textBn: string; textEn: string }) => void;
+  onOfflineReaction?: (emoji: string) => void;
 }
 
 const EMOJI_LIST = ['👍', '😂', '😮', '❤️', '👏', '🎉', '🔥', '🎲', '😎', '💀', '😱', '👑', '🥳', '💥', '🏆', '🎯', '🤝', '⚡'];
 
-export interface BanglaSoundboardClip {
-  id: string;
-  emoji: string;
-  textBn: string;
-  textEn: string;
-  tag?: string;
-}
-
-export const BANGLA_SOUNDBOARD_CLIPS: BanglaSoundboardClip[] = [
-  { id: 'chokka_maro', emoji: '🎲', textBn: 'ছক্কা মার রে ভাই!', textEn: 'Roll a six, brother!', tag: 'Dice' },
-  { id: 'ghuti_katar_ostad', emoji: '⚔️', textBn: 'ঘুঁটি কাটার ওস্তাদ আমি!', textEn: 'I am the capture master!', tag: 'Attack' },
-  { id: 'palabi_kothay', emoji: '🏃', textBn: 'পালাবি কোথায় এবার?', textEn: 'Where will you run now?', tag: 'Taunt' },
-  { id: 'dhora_khaili', emoji: '💀', textBn: 'ধরা খাইলিরে ভাই!', textEn: 'Caught you red-handed!', tag: 'Trap' },
-  { id: 'kop_samlao', emoji: '🎯', textBn: 'কোপ সামলাও!', textEn: 'Brace for impact!', tag: 'Attack' },
-  { id: 'ki_chal_dilen', emoji: '😲', textBn: 'আরে ভাই কি চাল দিলেন!', textEn: 'What a move brother!', tag: 'Shock' },
-  { id: 'shabdhane_chalis', emoji: '⚠️', textBn: 'একটু সাবধানে চালিস ভাই!', textEn: 'Play carefully brother!', tag: 'Caution' },
-  { id: 'ludu_raja', emoji: '👑', textBn: 'লুডু খেলার রাজা আমি!', textEn: 'I am the King of Ludo!', tag: 'Royal' },
-  { id: 'match_jome_geche', emoji: '🔥', textBn: 'ম্যাচ কিন্তু জমে গেছে!', textEn: 'Match is on fire!', tag: 'Hype' },
-  { id: 'taratari_chalao', emoji: '⚡', textBn: 'চালাও চালাও তাড়াতাড়ি!', textEn: 'Hurry up and move!', tag: 'Speed' },
-  { id: 'chokka_chara_goti_nai', emoji: '🚀', textBn: 'ছক্কা ছাড়া গতি নেই!', textEn: 'No progress without a six!', tag: 'Dice' },
-  { id: 'party_hobe', emoji: '🎉', textBn: 'আজকে রাতে পার্টি হবে!', textEn: 'Party tonight!', tag: 'Win' },
-  { id: 'eta_ki_holo', emoji: '😱', textBn: 'আরে ভাই এটা কি হলো?!', textEn: 'What just happened?!', tag: 'Shock' },
-  { id: 'ami_jitbo', emoji: '🏆', textBn: 'জিতবো কিন্তু আজ আমিই!', textEn: 'Victory will be mine today!', tag: 'Win' },
-];
+const BANGLA_SECONDS = ['০', '১', '২', '৩'];
 
 export const QuickReactions: React.FC<QuickReactionsProps> = ({ roomId, user, onOfflineReaction }) => {
   const [activeReactions, setActiveReactions] = useState<Array<ReactionEvent & { key: string }>>([]);
   const [showPicker, setShowPicker] = useState(false);
-  const [tab, setTab] = useState<'soundboard' | 'emoji'>('soundboard');
-  const [playingClipId, setPlayingClipId] = useState<string | null>(null);
+  const [tab, setTab] = useState<'voice' | 'emoji'>('voice');
+  const [micState, setMicState] = useState<'idle' | 'arming' | 'recording' | 'sending'>('idle');
+  const [remainingMs, setRemainingMs] = useState(MAX_CLIP_MS);
+  const [cooldownMs, setCooldownMs] = useState(0);
+  const [micError, setMicError] = useState<string | null>(null);
+  const [muted, setMuted] = useState(isGlobalMuted());
+  const [incomingClip, setIncomingClip] = useState<(VoiceClip & { key: string }) | null>(null);
 
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const holdingRef = useRef(false);
+
+  const clearTimers = useCallback(() => {
+    if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+    if (tickRef.current) clearInterval(tickRef.current);
+    holdTimerRef.current = null;
+    tickRef.current = null;
+  }, []);
+
+  useEffect(
+    () => () => {
+      clearTimers();
+      if (cooldownRef.current) clearInterval(cooldownRef.current);
+    },
+    [clearTimers]
+  );
+  useEffect(() => onMuteChange(() => setMuted(isGlobalMuted())), []);
+
+  // ---------------------------------------------------------------- reactions
   useEffect(() => {
     if (!roomId) return;
 
@@ -59,57 +77,154 @@ export const QuickReactions: React.FC<QuickReactionsProps> = ({ roomId, user, on
       if (Date.now() - data.timestamp < 6000) {
         const reactionItem = { ...data, key: `${data.id}_${Date.now()}` };
         setActiveReactions((prev) => [...prev.slice(-4), reactionItem]);
-
-        if (data.tauntTextBn) {
-          soundFx.playTaunt(data.tauntId || 'chokka_maro', data.tauntTextBn, data.tauntTextEn);
-        }
-
         setTimeout(() => {
           setActiveReactions((prev) => prev.filter((r) => r.key !== reactionItem.key));
-        }, 3500);
+        }, 3000);
       }
     };
 
-    // 1. Instant P2P Reaction Stream (< 20ms)
+    // 1. Instant P2P reaction stream (< 20ms)
     const unsubP2P = p2pMeshService.onMessage((msg) => {
       if (msg.type === 'REACTION' && msg.payload?.reaction) {
         triggerReaction(msg.payload.reaction as ReactionEvent);
       }
     });
 
-    // 2. Fallback Firestore Realtime Query
-    const q = query(
-      collection(db, 'rooms', roomId, 'reactions'),
-      orderBy('timestamp', 'desc'),
-      limit(5)
-    );
-
+    // 2. Fallback Firestore realtime query
+    const q = query(collection(db, 'rooms', roomId, 'reactions'), orderBy('timestamp', 'desc'), limit(5));
     const unsubFirestore = onSnapshot(q, (snapshot) => {
       snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added') {
-          const data = change.doc.data() as ReactionEvent;
-          triggerReaction(data);
-        }
+        if (change.type === 'added') triggerReaction(change.doc.data() as ReactionEvent);
       });
+    });
+
+    // 3. Voice clips ("আওয়াজ দাও")
+    const unsubVoice = subscribeToVoiceClips(roomId, (clip) => {
+      if (isPlayerMuted(clip.uid) || isGlobalMuted()) return;
+      const item = { ...clip, key: `${clip.clipId}_${Date.now()}` };
+      setIncomingClip(item);
+      playVoiceClip(clip);
+      setTimeout(() => {
+        setIncomingClip((prev) => (prev?.key === item.key ? null : prev));
+      }, Math.max(1200, clip.durationMs));
     });
 
     return () => {
       unsubP2P();
       unsubFirestore();
+      unsubVoice();
     };
   }, [roomId]);
 
-  // Preview sound effect & voice locally without sending to room
-  const handlePreviewClip = (e: React.MouseEvent, clip: BanglaSoundboardClip) => {
-    e.stopPropagation();
-    setPlayingClipId(clip.id);
-    soundFx.playTaunt(clip.id, clip.textBn, clip.textEn);
-    setTimeout(() => {
-      setPlayingClipId((prev) => (prev === clip.id ? null : prev));
-    }, 1800);
-  };
+  // ------------------------------------------------------------ voice: record
+  const finishRecording = useCallback(async () => {
+    if (!holdingRef.current) return;
+    holdingRef.current = false;
+    clearTimers();
 
-  // Broadcast emoji
+    let clip;
+    try {
+      clip = await stopRecording();
+    } catch (err) {
+      setMicState('idle');
+      setMicError((err as VoiceClipError)?.code === 'too-large' ? 'clip-too-large' : 'record-failed');
+      return;
+    }
+
+    setMicState('idle');
+    setRemainingMs(MAX_CLIP_MS);
+    if (!clip) return; // too short - silently ignore a stray tap
+
+    const payload: VoiceClip = {
+      clipId: `clip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      uid: user?.uid || 'player',
+      displayName: user?.displayName || 'Player',
+      avatar: user?.avatar,
+      mimeType: clip.mimeType,
+      durationMs: clip.durationMs,
+      data: clip.data,
+      createdAt: Date.now(),
+    };
+
+    if (roomId) {
+      const result = await sendVoiceClip(roomId, payload);
+      if (result === 'cooldown') {
+        setMicError('cooldown');
+        setCooldownMs(4000);
+      }
+    } else {
+      // Offline pass & play: just play it back for everyone on the device.
+      playVoiceClip(payload);
+      setIncomingClip({ ...payload, key: `local_${Date.now()}` });
+      setTimeout(() => setIncomingClip(null), Math.max(1200, payload.durationMs));
+    }
+  }, [clearTimers, roomId, user]);
+
+  const handleHoldStart = useCallback(
+    async (event: React.PointerEvent) => {
+      event.preventDefault();
+      if (holdingRef.current || micState === 'recording' || micState === 'arming') return;
+      if (cooldownMs > 0) {
+        setMicError('cooldown');
+        return;
+      }
+      holdingRef.current = true;
+      setMicError(null);
+      setMicState('arming');
+
+      try {
+        await startRecording();
+      } catch (err) {
+        holdingRef.current = false;
+        setMicState('idle');
+        setMicError((err as VoiceClipError)?.code === 'unsupported' ? 'unsupported' : 'permission-denied');
+        return;
+      }
+
+      if (!holdingRef.current) {
+        // Released before the mic was ready.
+        await stopRecording();
+        return;
+      }
+
+      soundFx.click();
+      setMicState('recording');
+      setRemainingMs(MAX_CLIP_MS);
+
+      tickRef.current = setInterval(() => {
+        setRemainingMs((prev) => Math.max(0, prev - 100));
+      }, 100);
+
+      // Hard 3 second cap.
+      holdTimerRef.current = setTimeout(() => {
+        void finishRecording();
+      }, MAX_CLIP_MS);
+
+      // Some browsers stop delivering pointer events on touch; also stop on
+      // window-level release so a finger that slides off still sends.
+      window.addEventListener('pointerup', handleHoldEnd as EventListener, { once: true });
+    },
+    [cooldownMs, finishRecording, micState]
+  );
+
+  const handleHoldEnd = useCallback(() => {
+    window.removeEventListener('pointerup', handleHoldEnd as EventListener);
+    if (!holdingRef.current) return;
+    void finishRecording();
+  }, [finishRecording]);
+
+  useEffect(() => {
+    if (cooldownMs <= 0) {
+      if (cooldownRef.current) clearInterval(cooldownRef.current);
+      cooldownRef.current = null;
+      return;
+    }
+    if (cooldownRef.current) return;
+    cooldownRef.current = setInterval(() => {
+      setCooldownMs((prev) => Math.max(0, prev - 100));
+    }, 100);
+  }, [cooldownMs]);
+
   const handleSendEmoji = async (emoji: string) => {
     soundFx.click();
     setShowPicker(false);
@@ -119,7 +234,6 @@ export const QuickReactions: React.FC<QuickReactionsProps> = ({ roomId, user, on
     } else if (onOfflineReaction) {
       onOfflineReaction(emoji);
     } else {
-      // Local visual float
       const localItem: ReactionEvent & { key: string } = {
         id: 'local',
         key: `local_${Date.now()}`,
@@ -135,49 +249,12 @@ export const QuickReactions: React.FC<QuickReactionsProps> = ({ roomId, user, on
     }
   };
 
-  // Broadcast soundboard clip (plays audio + floats banner)
-  const handleSendSoundboardClip = async (clip: BanglaSoundboardClip) => {
-    soundFx.click();
-    setShowPicker(false);
-
-    // Trigger immediate local audio
-    soundFx.playTaunt(clip.id, clip.textBn, clip.textEn);
-
-    if (roomId && user) {
-      await sendReaction(roomId, user, clip.emoji, {
-        id: clip.id,
-        textBn: clip.textBn,
-        textEn: clip.textEn,
-      });
-    } else if (onOfflineReaction) {
-      onOfflineReaction(clip.emoji, {
-        id: clip.id,
-        textBn: clip.textBn,
-        textEn: clip.textEn,
-      });
-    } else {
-      // Local floating speech bubble
-      const localItem: ReactionEvent & { key: string } = {
-        id: clip.id,
-        key: `local_${Date.now()}`,
-        uid: user?.uid || 'player',
-        displayName: user?.displayName || 'Player',
-        emoji: clip.emoji,
-        tauntId: clip.id,
-        tauntTextBn: clip.textBn,
-        tauntTextEn: clip.textEn,
-        timestamp: Date.now(),
-      };
-      setActiveReactions((prev) => [...prev.slice(-3), localItem]);
-      setTimeout(() => {
-        setActiveReactions((prev) => prev.filter((r) => r.key !== localItem.key));
-      }, 3500);
-    }
-  };
+  const secondsLeft = Math.ceil(remainingMs / 1000);
+  const supported = isVoiceClipSupported();
 
   return (
     <>
-      {/* Floating Reaction Animations & Bangla Speech Bubbles over board */}
+      {/* Floating emoji reactions and "someone is speaking" banner */}
       <div className="fixed inset-0 pointer-events-none z-50 flex items-center justify-center overflow-hidden">
         <AnimatePresence>
           {activeReactions.map((r, idx) => (
@@ -191,139 +268,187 @@ export const QuickReactions: React.FC<QuickReactionsProps> = ({ roomId, user, on
             >
               <div className="flex items-center gap-2">
                 <span className="text-2xl animate-bounce">{r.emoji}</span>
-                <span className="text-xs font-black text-amber-300 max-w-[130px] truncate">
-                  {r.displayName}
-                </span>
+                <span className="text-xs font-black text-amber-300 max-w-[130px] truncate">{r.displayName}</span>
               </div>
-              {r.tauntTextBn && (
-                <div className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-500/25 rounded-xl border border-amber-400/50 shadow-inner">
-                  <Volume2 className="w-3.5 h-3.5 text-amber-300 animate-pulse shrink-0" />
-                  <span className="text-xs font-bold text-amber-100 font-serif leading-tight">
-                    {r.tauntTextBn}
-                  </span>
-                </div>
-              )}
             </motion.div>
           ))}
+
+          {incomingClip && (
+            <motion.div
+              key={incomingClip.key}
+              initial={{ y: 40, opacity: 0, scale: 0.8 }}
+              animate={{ y: -30, opacity: 1, scale: 1 }}
+              exit={{ y: -80, opacity: 0, scale: 0.9 }}
+              transition={{ duration: 0.25 }}
+              className="absolute bg-neutral-950/95 border-2 border-emerald-400/80 px-4 py-2.5 rounded-2xl shadow-[0_12px_36px_rgba(0,0,0,0.9)] flex items-center gap-2.5 backdrop-blur-md"
+            >
+              <span className="text-2xl">{incomingClip.avatar || '🎤'}</span>
+              <div className="flex flex-col">
+                <span className="text-[11px] font-black text-emerald-300 truncate max-w-[130px]">
+                  {incomingClip.displayName}
+                </span>
+                <span className="text-[10px] font-bold text-neutral-300">🔊 আওয়াজ দিলেন…</span>
+              </div>
+              <div className="flex items-end gap-0.5 h-5 ml-1">
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <motion.span
+                    key={i}
+                    className="w-1 bg-emerald-400 rounded-full"
+                    animate={{ height: ['30%', '100%', '45%', '85%', '30%'] }}
+                    transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.12 }}
+                  />
+                ))}
+              </div>
+            </motion.div>
+          )}
         </AnimatePresence>
       </div>
 
-      {/* Emoji / Soundboard Trigger & Popover Drawer */}
+      {/* Trigger & drawer */}
       <div className="relative">
         <button
           id="quick-reactions-btn"
           onClick={() => setShowPicker(!showPicker)}
           className="px-3 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 border border-amber-400/60 text-white transition-all shadow-md active:scale-95 cursor-pointer flex items-center gap-1.5 text-xs font-bold ring-1 ring-amber-300/30"
-          title="Bangla Fun Soundboard & Reactions"
+          title="আওয়াজ দাও (Voice) & Reactions"
         >
-          <Volume2 className="w-4 h-4 text-amber-200 animate-pulse" />
-          <span className="hidden sm:inline">সাউন্ডবোর্ড (Soundboard)</span>
-          <span className="sm:hidden inline">Soundboard</span>
+          <Mic className="w-4 h-4 text-amber-200 animate-pulse" />
+          <span className="hidden sm:inline">আওয়াজ দাও</span>
+          <span className="sm:hidden inline">Awaz</span>
         </button>
 
         {showPicker && (
           <motion.div
             initial={{ scale: 0.9, opacity: 0, y: 10 }}
             animate={{ scale: 1, opacity: 1, y: 0 }}
-            className="absolute bottom-12 right-0 w-[310px] sm:w-[360px] bg-neutral-950 border-2 border-amber-500/40 rounded-2xl p-3 shadow-2xl z-40 flex flex-col gap-2.5 backdrop-blur-xl"
+            className="absolute bottom-12 right-0 w-[290px] sm:w-[330px] bg-neutral-950 border-2 border-amber-500/40 rounded-2xl p-3 shadow-2xl z-40 flex flex-col gap-2.5 backdrop-blur-xl"
           >
-            {/* Header Tabs */}
-            <div className="flex bg-neutral-900 p-1 rounded-xl border border-neutral-800">
+            {/* Header tabs + global mute */}
+            <div className="flex items-center gap-1.5">
+              <div className="flex flex-1 bg-neutral-900 p-1 rounded-xl border border-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => setTab('voice')}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    tab === 'voice'
+                      ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-neutral-950 shadow font-black'
+                      : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  <Mic className="w-3.5 h-3.5" />
+                  আওয়াজ দাও
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTab('emoji')}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    tab === 'emoji'
+                      ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-neutral-950 shadow font-black'
+                      : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  <Smile className="w-3.5 h-3.5" />
+                  ইমোজি
+                </button>
+              </div>
               <button
                 type="button"
-                onClick={() => setTab('soundboard')}
-                className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                  tab === 'soundboard'
-                    ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-neutral-950 shadow font-black'
-                    : 'text-neutral-400 hover:text-white'
+                onClick={() => {
+                  const next = !muted;
+                  setMuted(next);
+                  setGlobalMuted(next);
+                }}
+                title={muted ? 'সব আওয়াজ চালু করুন' : 'সব আওয়াজ বন্ধ করুন'}
+                className={`p-2 rounded-xl border cursor-pointer transition-all ${
+                  muted
+                    ? 'bg-red-950/60 border-red-700/70 text-red-300'
+                    : 'bg-neutral-900 border-neutral-800 text-neutral-300 hover:text-white'
                 }`}
               >
-                <Volume2 className="w-3.5 h-3.5" />
-                বাংলা সাউন্ডবোর্ড
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab('emoji')}
-                className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                  tab === 'emoji'
-                    ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-neutral-950 shadow font-black'
-                    : 'text-neutral-400 hover:text-white'
-                }`}
-              >
-                <Smile className="w-3.5 h-3.5" />
-                ইমোজি রিঅ্যাকশন
+                {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
               </button>
             </div>
 
-            {/* Tab 1: Bangla Fun Soundboard */}
-            {tab === 'soundboard' && (
-              <div className="flex flex-col gap-1.5">
-                <div className="flex items-center justify-between px-1 text-[11px] text-amber-300 font-semibold">
-                  <span>🎙️ বাংলা ফান ডায়লগ ও সাউন্ড ক্লিপ:</span>
-                  <span className="text-[10px] text-neutral-400">ট্যাপ করে শোনান</span>
+            {/* Tab 1: hold to talk */}
+            {tab === 'voice' && (
+              <div className="flex flex-col items-center gap-2 py-1">
+                <p className="text-[11px] font-bold text-neutral-400 text-center leading-tight">
+                  চেপে ধরে কথা বলুন — সর্বোচ্চ ৩ সেকেন্ড, সাথে সাথে সবাই শুনবে
+                  <br />
+                  <span className="text-neutral-500 font-semibold">Hold to talk (max 3s) — everyone hears it instantly</span>
+                </p>
+
+                <button
+                  type="button"
+                  data-testid="awaz-dao-button"
+                  disabled={!supported || cooldownMs > 0}
+                  onPointerDown={handleHoldStart}
+                  onPointerUp={handleHoldEnd}
+                  onPointerLeave={handleHoldEnd}
+                  onPointerCancel={handleHoldEnd}
+                  className={`select-none touch-none w-24 h-24 rounded-full flex flex-col items-center justify-center gap-1 font-black transition-all border-4 ${
+                    micState === 'recording'
+                      ? 'bg-red-600 border-red-300 text-white scale-105 shadow-[0_0_28px_rgba(239,68,68,0.6)]'
+                      : cooldownMs > 0 || !supported
+                        ? 'bg-neutral-900 border-neutral-800 text-neutral-600 cursor-not-allowed'
+                        : 'bg-gradient-to-br from-amber-500 to-amber-700 border-amber-300 text-neutral-950 active:scale-95 cursor-pointer'
+                  }`}
+                >
+                  {micState === 'arming' ? (
+                    <Loader2 className="w-7 h-7 animate-spin" />
+                  ) : (
+                    <Mic className="w-7 h-7" />
+                  )}
+                  <span className="text-[10px] font-black uppercase tracking-wide">
+                    {micState === 'recording'
+                      ? `${BANGLA_SECONDS[Math.min(3, secondsLeft)]}s`
+                      : cooldownMs > 0
+                        ? `${Math.ceil(cooldownMs / 1000)}s`
+                        : 'HOLD'}
+                  </span>
+                </button>
+
+                {/* Progress ring / countdown bar */}
+                <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all ${micState === 'recording' ? 'bg-red-500' : 'bg-amber-500'}`}
+                    style={{
+                      width: `${
+                        cooldownMs > 0
+                          ? ((4000 - cooldownMs) / 4000) * 100
+                          : micState === 'recording'
+                            ? (remainingMs / MAX_CLIP_MS) * 100
+                            : 100
+                      }%`,
+                    }}
+                  />
                 </div>
 
-                <div className="grid grid-cols-1 gap-1.5 max-h-[260px] overflow-y-auto pr-1">
-                  {BANGLA_SOUNDBOARD_CLIPS.map((clip) => {
-                    const isPlaying = playingClipId === clip.id;
-
-                    return (
-                      <div
-                        key={clip.id}
-                        className={`w-full p-2 rounded-xl border flex items-center justify-between gap-2 transition-all text-xs group cursor-pointer ${
-                          isPlaying
-                            ? 'bg-amber-500/20 border-amber-400 text-amber-100 shadow-md ring-1 ring-amber-400/50'
-                            : 'bg-neutral-900 hover:bg-neutral-850 border-neutral-800 hover:border-amber-500/50 text-neutral-200'
-                        }`}
-                        onClick={() => handleSendSoundboardClip(clip)}
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                          <span className="text-xl group-hover:scale-125 transition-transform shrink-0">
-                            {clip.emoji}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <p className="font-bold text-white text-xs truncate group-hover:text-amber-300">
-                                {clip.textBn}
-                              </p>
-                              {clip.tag && (
-                                <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-neutral-800 text-neutral-400 shrink-0 font-medium">
-                                  {clip.tag}
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-[10px] text-neutral-400 truncate">{clip.textEn}</p>
-                          </div>
-                        </div>
-
-                        {/* Local Preview Audio Button */}
-                        <button
-                          type="button"
-                          onClick={(e) => handlePreviewClip(e, clip)}
-                          className={`p-1.5 rounded-lg border transition-all shrink-0 cursor-pointer ${
-                            isPlaying
-                              ? 'bg-amber-500 text-neutral-950 border-amber-400 shadow-sm animate-pulse'
-                              : 'bg-neutral-800 hover:bg-amber-950/60 border-neutral-700 text-neutral-300 hover:text-amber-300'
-                          }`}
-                          title="Preview Audio Clip"
-                        >
-                          <Volume2 className={`w-3.5 h-3.5 ${isPlaying ? 'animate-bounce' : ''}`} />
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
+                {micError && (
+                  <p className="text-[10px] font-bold text-amber-300 text-center">
+                    {micError === 'permission-denied'
+                      ? 'মাইক্রোফোনের অনুমতি পাওয়া যায়নি (mic permission denied)'
+                      : micError === 'unsupported'
+                        ? 'এই ব্রাউজারে রেকর্ডিং সাপোর্ট করে না (unsupported browser)'
+                        : micError === 'cooldown'
+                          ? 'একটু অপেক্ষা করুন — ৪ সেকেন্ড পর আবার চেষ্টা করুন'
+                          : micError === 'clip-too-large'
+                            ? 'রেকর্ডিং খুব বড় হয়ে গেছে'
+                            : 'রেকর্ডিং ব্যর্থ হয়েছে, আবার চেষ্টা করুন'}
+                  </p>
+                )}
               </div>
             )}
 
-            {/* Tab 2: Standard Emojis */}
+            {/* Tab 2: emoji reactions */}
             {tab === 'emoji' && (
-              <div className="grid grid-cols-6 gap-1.5 max-h-[240px] overflow-y-auto p-1">
+              <div className="grid grid-cols-6 gap-1.5">
                 {EMOJI_LIST.map((emoji) => (
                   <button
                     key={emoji}
+                    type="button"
                     onClick={() => handleSendEmoji(emoji)}
-                    className="h-10 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-amber-500/50 flex items-center justify-center text-xl transition-transform hover:scale-125 active:scale-90 cursor-pointer"
+                    className="text-xl p-1.5 rounded-lg hover:bg-neutral-800 active:scale-90 transition-transform cursor-pointer"
                   >
                     {emoji}
                   </button>
@@ -335,6 +460,4 @@ export const QuickReactions: React.FC<QuickReactionsProps> = ({ roomId, user, on
       </div>
     </>
   );
-};
-
-
+}

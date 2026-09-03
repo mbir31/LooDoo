@@ -52,6 +52,18 @@ describe('Firestore security rules', () => {
     expect(rules).toMatch(/before\.status\s*==\s*'GAME_OVER'\s*&&\s*after\.status\s*!=\s*'GAME_OVER'/);
   });
 
+  it('keeps "আওয়াজ দাও" voice clips members-only, size capped and ephemeral', () => {
+    const clips = rules.slice(rules.indexOf('/voiceClips/{clipId}'));
+    expect(clips.slice(0, 1200)).toMatch(/allow\s+read:\s*if\s+signedIn\(\)\s*&&\s*isRoomMember\(roomId\)/);
+    expect(clips.slice(0, 1200)).toMatch(/request\.resource\.data\.uid\s*==\s*me\(\)/);
+    expect(clips.slice(0, 1200)).toMatch(/request\.resource\.data\.data\.size\(\)\s*<=\s*32768/);
+    expect(clips.slice(0, 1200)).toMatch(/durationMs\s*<=\s*4000/);
+    expect(clips.slice(0, 1200)).toMatch(/mimeType in \[/);
+    // A clip can never be edited, only removed by its sender or the admin.
+    expect(clips.slice(0, 1200)).toMatch(/allow\s+update:\s*if\s+false/);
+    expect(clips.slice(0, 1200)).toMatch(/resource\.data\.uid\s*==\s*me\(\)/);
+  });
+
   it('only lets room members post reactions and P2P signals', () => {
     const reactions = rules.slice(rules.indexOf('/reactions/{reactionId}'));
     expect(reactions.slice(0, 900)).toMatch(/isRoomMember\(roomId\)/);

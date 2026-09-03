@@ -584,8 +584,8 @@ export const PassAndPlayGame: React.FC<PassAndPlayGameProps> = ({
             <div className="w-full flex items-center justify-between gap-2 pt-2 border-t border-neutral-850">
               <QuickReactions
                 user={currentUser}
-                onOfflineReaction={(emoji, taunt) => {
-                  // Handled with sound and float
+                onOfflineReaction={() => {
+                  // Handled with sound and floating reaction inside the panel
                 }}
               />
               <button

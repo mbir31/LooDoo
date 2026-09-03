@@ -217,6 +217,18 @@ export interface ReactionEvent {
   timestamp: number;
 }
 
+export interface VoiceClip {
+  clipId: string;
+  uid: string;
+  displayName: string;
+  avatar?: string;
+  mimeType: string;
+  durationMs: number;
+  /** Base64 encoded audio, no data-url prefix. */
+  data: string;
+  createdAt: number;
+}
+
 export interface GameHistoryRecord {
   gameId: string;
   roomId: string;

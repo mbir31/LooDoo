@@ -40,7 +40,7 @@ LooDoo tries to capture the feeling of the Ludo we grew up playing.
 | 👥 বন্ধুদের সাথে Online Multiplayer | Real-time online multiplayer |
 | 📱 এক ফোনে ২-৪ জন | 2-4 player Pass & Play |
 | 🤖 AI-এর বিরুদ্ধে খেলা | Play against AI |
-| 😂 বাংলা মজার Soundboard | Fun Bangla soundboard & reactions |
+| 🎤 আওয়াজ দাও (Voice Clips) | Hold to talk - 3s voice clips sent instantly |
 | ⚔️ 2v2 Team Battle | 2v2 partnership matches |
 | 🐍 সাপ-লুডু | Bangladeshi-inspired Snakes & Ladders |
 | 🏆 XP, Level & Achievements | XP, levels & achievements |
@@ -117,25 +117,28 @@ Communication, strategy and a little bit of luck can decide everything.
 
 ---
 
-😂 BANGLA FUN SOUNDBOARD
+🎤 আওয়াজ দাও (AWAZ DAO - HOLD TO TALK)
 
 Ludo without teasing isn't really Ludo. 😄
 
-LooDoo adds Bangla-inspired reactions and playful voice clips to make matches more entertaining.
+Why type when you can just say it? **Press and hold the mic, talk for up to 3
+seconds, release - and everyone in the room hears you instantly.**
 
-🎲 "ছক্কা মার রে ভাই!"
+🎙️ Hold the mic button to record (max 3 seconds)
 
-⚔️ "ঘুঁটি কাটার ওস্তাদ আমি!"
+⚡ Delivered in well under a second over the peer-to-peer data channel
 
-🏃 "পালাবি কোথায় এবার?"
+🔊 Plays automatically on every device in the room
 
-😲 "আরে ভাই, কী চাল দিলেন!"
+🔇 One global mute switch, plus a per-player mute on every player card
 
-👑 "লুডু খেলার রাজা আমি!"
+🚫 Rate limited (one clip every 4 seconds) so nobody can spam the room
 
-🔥 "ম্যাচ কিন্তু জমে গেছে!"
+🔒 Ephemeral by design: clips travel peer to peer and never get stored - the
+Firestore fallback deletes each clip the moment it is consumed
 
-And more fun reactions to make your matches feel like a real Bangladeshi adda.
+Mic permission is optional: deny it and the button simply steps aside, leaving
+emoji reactions and the soundboard-free UI fully working.
 
 ---
 
@@ -383,7 +386,7 @@ LooDoo combines modern frontend technology with real-time multiplayer infrastruc
 | 🔥 Firebase Firestore | Real-time cloud persistence & room discovery |
 | 🔐 Firebase Authentication | Guest authentication & sessions |
 | 🎨 HTML5 Canvas | Match summary generation |
-| 🔊 Web Audio API | Game sounds & Bangla soundboard |
+| 🔊 Web Audio API + MediaRecorder | Game sounds & 3s voice clips |
 | 📦 PWA | Installable web experience |
 | ☁️ Vercel | Hosting & deployment |
 
@@ -467,7 +470,7 @@ npm run typecheck   # tsc --noEmit
 npm run build       # production bundle
 ```
 
-135 tests across 9 files:
+157 tests across 11 files:
 
 | Suite | What it proves |
 | :--- | :--- |
@@ -478,7 +481,9 @@ npm run build       # production bundle
 | `tests/ai.test.ts` | bots only play legal moves, prefer captures/home, team awareness |
 | `tests/onlineMultiplayer.test.ts` | 2/3/4 clients, admin rules, sync, stale-write rejection, rematch, reconnect |
 | `tests/offlinePassAndPlay.test.tsx` | pass & play boots and plays with Firebase fully mocked out |
-| `tests/p2pMesh.test.ts` | signalling, teardown, and "WebRTC failure never breaks gameplay" |
+| `tests/p2pMesh.test.ts` | signalling, chunked voice clips, teardown, and "WebRTC failure never breaks gameplay" |
+| `tests/voiceClip.test.ts` | আওয়াজ দাও: recording, 3s cap, chunking/reassembly, rate limit, muting, Firestore fallback |
+| `tests/awazDao.ui.test.tsx` | the hold-to-talk button end to end with faked browser media APIs |
 | `tests/staticConfig.test.ts` | security rules, manifest/PWA wiring and scorecard honesty |
 
 Online multiplayer is tested against an in-memory Firestore double

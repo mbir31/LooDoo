@@ -273,6 +273,54 @@ describe('P2P mesh (WebRTC signalling over Firestore)', () => {
     expect(getFakeDb().writes).toBe(writesBefore);
   });
 
+  it('carries chunked "আওয়াজ দাও" voice clips over the real data channel', async () => {
+    const service = await loadService();
+    await service.initRoomMesh('room9', 'aaa');
+    await flush();
+
+    const { setDoc, doc } = await import('firebase/firestore');
+    await setDoc(doc({} as any, 'rooms/room9/p2pPresence/zzz'), { uid: 'zzz', joinedAt: Date.now() });
+    await flush(20);
+
+    const channel = channels[0];
+    channel.readyState = 'open';
+    channel.onopen?.();
+
+    const heard: any[] = [];
+    service.onMessage((msg) => {
+      if (msg.type === 'VOICE_CLIP') heard.push(msg);
+    });
+
+    const data = 'y'.repeat(20_000); // ~2.5 frames of 8 KB
+    const CHUNK = 8 * 1024;
+    const total = Math.ceil(data.length / CHUNK);
+    for (let seq = 0; seq < total; seq++) {
+      service.broadcast('VOICE_CLIP', {
+        clipId: 'clip-42',
+        seq,
+        total,
+        chunk: data.slice(seq * CHUNK, (seq + 1) * CHUNK),
+        meta: seq === 0 ? { clipId: 'clip-42', uid: 'aaa', displayName: 'A', mimeType: 'audio/webm', durationMs: 2000, createdAt: Date.now() } : undefined,
+      });
+    }
+
+    // The channel also carries the latency PING sent when it opened.
+    const frames = channel.sent.map((raw) => JSON.parse(raw)).filter((m) => m.type === 'VOICE_CLIP');
+    expect(frames.length).toBe(total);
+    for (const frame of frames) {
+      expect(JSON.stringify(frame).length).toBeLessThan(16 * 1024); // data-channel safe limit
+    }
+
+    // Feed the frames back in as if the peer received them.
+    frames.forEach((frame) => channel.onmessage?.({ data: JSON.stringify(frame) }));
+
+    expect(heard.length).toBe(total);
+    expect(heard[0].payload.seq).toBe(0);
+    expect(heard[heard.length - 1].payload.seq).toBe(total - 1);
+
+    service.teardown();
+  });
+
   it('a throwing P2P layer never blocks a reaction from being sent', async () => {
     const service = await loadService();
     await service.initRoomMesh('room8', 'aaa');
