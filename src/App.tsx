@@ -691,7 +691,7 @@ export default function App() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4 text-center">
+      <div className="min-h-[100dvh] bg-black flex flex-col items-center justify-center p-4 text-center pt-safe pb-safe">
         <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-red-500 via-amber-500 to-emerald-500 p-1 flex items-center justify-center shadow-xl shadow-amber-500/20 animate-pulse">
           <div className="w-full h-full bg-black rounded-xl flex items-center justify-center text-2xl font-black text-amber-400">
             🎲
@@ -724,7 +724,7 @@ export default function App() {
   const myColor = myPlayer?.color || 'red';
 
   return (
-    <div className="min-h-screen bg-black text-neutral-100 flex flex-col selection:bg-amber-500 selection:text-neutral-950 font-sans">
+    <div className="min-h-[100dvh] bg-black text-neutral-100 flex flex-col selection:bg-amber-500 selection:text-neutral-950 font-sans pt-safe pb-safe">
       {/* Top Navigation Header */}
       <Header
         user={user}

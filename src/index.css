@@ -7,6 +7,26 @@
   .grid-rows-15 {
     grid-template-rows: repeat(15, minmax(0, 1fr));
   }
+
+  /* iOS safe areas: the app runs full-bleed (viewport-fit=cover), so content
+     has to be inset manually or it hides under the notch / home indicator. */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .px-safe {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+  .mx-safe {
+    margin-left: env(safe-area-inset-left, 0px);
+    margin-right: env(safe-area-inset-right, 0px);
+  }
+  .bottom-safe {
+    bottom: env(safe-area-inset-bottom, 0px);
+  }
 }
 
 html, body, #root {
@@ -17,5 +37,18 @@ html, body, #root {
   user-select: none;
   -webkit-tap-highlight-color: transparent;
   min-height: 100vh;
+}
+
+/* dvh keeps the shell the right size while mobile browser chrome collapses. */
+@supports (min-height: 100dvh) {
+  html, body, #root {
+    min-height: 100dvh;
+  }
+}
+
+/* Landscape notch protection applies to every screen. */
+#root {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
