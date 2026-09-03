@@ -82,8 +82,6 @@ export interface RoomPlayer {
   lastSeenAt: number;
   sixesRolled?: number;
   capturesMade?: number;
-  /** Set by a live voice layer (if enabled) to render the speaking indicator. */
-  isSpeaking?: boolean;
 }
 
 export interface RoomSettings {

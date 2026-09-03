@@ -1,7 +1,7 @@
 {
   "name": "LooDoo : লুডু - Multiplayer Bangladeshi Ludo",
   "short_name": "LooDoo",
-  "description": "Production-grade Real-Time Multiplayer Bangladeshi Ludo PWA with WebRTC Live Voice Chat and Pass-and-Play",
+  "description": "Production-grade Real-Time Multiplayer Bangladeshi Ludo PWA with P2P Reactions and Pass-and-Play",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
