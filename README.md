@@ -420,6 +420,102 @@ The development server will then be available through the local Vite URL.
 
 ---
 
+🏗️ ARCHITECTURE
+
+Every mode (online multiplayer, offline pass & play, and the AI) funnels through
+one deterministic rules engine, so a move that is legal offline is legal online:
+
+```
+      UI (React)                     components/ + App.tsx
+          │
+          ▼
+      Engine  ──────────────────►   game-engine/engine.ts   (pure geometry & rules)
+          │                         game-engine/reducer.ts  (createGameDocument,
+          │                                                  applyRollDice,
+          │                                                  applyTokenMove,
+          │                                                  applyTurnTimeout)
+          ▼
+      Validation ───────────────►   game-engine/validation.ts
+          │                         validateGameDocument / validateTransition
+          ▼
+      State ───────────────────►    game-engine/ai.ts (bots & auto-move are just
+          │                         clients of the same engine)
+          ▼
+      Persistence / Transport ──►   services/gameService.ts (Firestore)
+                                    services/p2pMeshService.ts (WebRTC data mesh)
+```
+
+Key properties:
+
+- The engine is pure and versioned: every action returns a **new** `GameDocument`
+  with `version + 1`. No mutation, no hidden state, so simulations and tests are
+  reproducible with a seeded PRNG.
+- Animation lives in the UI layer only (`DiceComponent`, `BoardToken`), so a slow
+  or interrupted animation can never drop or replay a move.
+- Firestore is the source of truth for online rooms; the WebRTC mesh is an
+  optional latency optimisation for reactions and must never be required for
+  gameplay.
+
+---
+
+✅ TESTING
+
+```bash
+npm test            # whole suite (jsdom for UI tests, node for engine/services)
+npm run test:watch  # watch mode
+npm run typecheck   # tsc --noEmit
+npm run build       # production bundle
+```
+
+135 tests across 9 files:
+
+| Suite | What it proves |
+| :--- | :--- |
+| `src/game-engine/engine.test.ts` | board geometry, safe cells, captures, blockades, home paths |
+| `src/game-engine/reducer.test.ts` | turn flow, 6-to-leave-yard, consecutive sixes, timeouts, win detection |
+| `tests/snakeLadder.test.ts` | Snakes & Ladders branch of the engine (exactly 100, no overshoot) |
+| `tests/fullGame.test.ts` | seeded full matches for 2/3/4 players, Rush and 2v2 |
+| `tests/ai.test.ts` | bots only play legal moves, prefer captures/home, team awareness |
+| `tests/onlineMultiplayer.test.ts` | 2/3/4 clients, admin rules, sync, stale-write rejection, rematch, reconnect |
+| `tests/offlinePassAndPlay.test.tsx` | pass & play boots and plays with Firebase fully mocked out |
+| `tests/p2pMesh.test.ts` | signalling, teardown, and "WebRTC failure never breaks gameplay" |
+| `tests/staticConfig.test.ts` | security rules, manifest/PWA wiring and scorecard honesty |
+
+Online multiplayer is tested against an in-memory Firestore double
+(`tests/helpers/fakeFirestore.ts`) so races, stale snapshots and reconnect
+behaviour are exercised without a network.
+
+---
+
+🔐 SECURITY RULES
+
+`firestore.rules` requires authentication for every operation and additionally
+enforces:
+
+- rooms, game documents and history can never be deleted;
+- only the room admin may create a room or start a match;
+- a game may only be advanced by a room member who owns the turn (or the admin,
+  for timeouts and AI-driven bots);
+- `version` must increase by exactly one — this blocks replayed, duplicated and
+  out-of-order writes (the classic last-write-wins corruption);
+- identity fields (`gameId`, `roomId`, `playerOrder`, `startedAt`) are immutable
+  and a finished match cannot be reopened;
+- token documents must keep a legal shape and the roster cannot change mid-match;
+- a user may only read and write their own profile document.
+
+Deploy them with:
+
+```bash
+firebase deploy --only firestore:rules
+```
+
+**Residual risk (accepted):** because the game is client-authoritative, a
+malicious room member can still post an illegal board position. Closing that gap
+requires a trusted referee — move the reducer into Cloud Functions (or a small
+game server) and have it be the only writer of `rooms/{roomId}/games/{gameId}`.
+
+---
+
 🤝 OPEN SOURCE
 
 LooDoo is an open-source project created as a personal experiment and a celebration of multiplayer Ludo.
