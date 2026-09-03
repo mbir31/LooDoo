@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { RoomPlayer, PlayerColor, Language, GameDocument } from '../../types';
 import { getTranslation } from '../../i18n/translations';
 import { countTokensHome } from '../../game-engine/engine';
-import { Trophy, Wifi, WifiOff, Crown } from 'lucide-react';
+import { Trophy, Wifi, WifiOff, Crown, Volume2, VolumeX } from 'lucide-react';
+import { isPlayerMuted, setPlayerMuted } from '../../services/voiceClipService';
 
 interface PlayerCardProps {
   player: RoomPlayer;
@@ -12,6 +13,8 @@ interface PlayerCardProps {
   game?: GameDocument | null;
   language: Language;
   isMe: boolean;
+  /** Shows the per-player "mute their voice clips" toggle (online + offline). */
+  showVoiceMute?: boolean;
 }
 
 const COLOR_BORDER: Record<PlayerColor, string> = {
@@ -35,9 +38,15 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
   game,
   language,
   isMe,
+  showVoiceMute = true,
 }) => {
   const color = player.color || 'red';
   const tokensHome = game ? countTokensHome(player.uid, game.tokens) : 0;
+  const [voiceMuted, setVoiceMuted] = useState(() => isPlayerMuted(player.uid));
+
+  useEffect(() => {
+    setVoiceMuted(isPlayerMuted(player.uid));
+  }, [player.uid]);
 
   return (
     <motion.div
@@ -63,14 +72,6 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
           : 'bg-neutral-950 border-neutral-800'
       }`}
     >
-      {/* Speaking Glow Animation */}
-      {player.isSpeaking && (
-        <span className="absolute -top-1 -right-1 flex h-3 w-3">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-          <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
-        </span>
-      )}
-
       <div className="flex items-center gap-2">
         {/* Avatar & Slot */}
         <div className="relative shrink-0">
@@ -96,7 +97,9 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
               </span>
             )}
             {isAdmin && (
-              <Crown className="w-3 h-3 text-amber-400 shrink-0" title="Admin" />
+              <span title="Admin" className="shrink-0 inline-flex">
+                <Crown className="w-3 h-3 text-amber-400" />
+              </span>
             )}
           </div>
 
@@ -111,11 +114,34 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
               </span>
             </div>
 
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
+              {!isMe && showVoiceMute && (
+                <button
+                  type="button"
+                  data-testid={`voice-mute-${player.uid}`}
+                  aria-pressed={voiceMuted}
+                  title={voiceMuted ? 'এর আওয়াজ চালু করুন (unmute voice)' : 'এর আওয়াজ বন্ধ করুন (mute voice)'}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    const next = !voiceMuted;
+                    setVoiceMuted(next);
+                    setPlayerMuted(player.uid, next);
+                  }}
+                  className={`cursor-pointer transition-colors ${
+                    voiceMuted ? 'text-red-400 hover:text-red-300' : 'text-neutral-500 hover:text-neutral-200'
+                  }`}
+                >
+                  {voiceMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                </button>
+              )}
               {player.connected ? (
-                <Wifi className="w-3 h-3 text-emerald-400" title="Connected" />
+                <span title="Connected" className="inline-flex">
+                  <Wifi className="w-3 h-3 text-emerald-400" />
+                </span>
               ) : (
-                <WifiOff className="w-3 h-3 text-red-400" title="Disconnected" />
+                <span title="Disconnected" className="inline-flex">
+                  <WifiOff className="w-3 h-3 text-red-400" />
+                </span>
               )}
             </div>
           </div>

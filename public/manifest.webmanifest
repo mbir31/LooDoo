@@ -1,7 +1,7 @@
 {
   "name": "LooDoo : লুডু - Multiplayer Bangladeshi Ludo",
   "short_name": "LooDoo",
-  "description": "Production-grade Real-Time Multiplayer Bangladeshi Ludo PWA with WebRTC Live Voice Chat and Pass-and-Play",
+  "description": "Production-grade Real-Time Multiplayer Bangladeshi Ludo PWA with P2P Reactions and Pass-and-Play",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -10,25 +10,35 @@
   "theme_color": "#0c0a09",
   "lang": "bn",
   "dir": "ltr",
-  "categories": ["games", "entertainment"],
+  "categories": [
+    "games",
+    "entertainment"
+  ],
   "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
     {
       "src": "/icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "/icon.svg",
-      "sizes": "192x192 512x512",
-      "type": "image/svg+xml",
       "purpose": "any"
-    },
-    {
-      "src": "/icon.svg",
-      "sizes": "192x192 512x512",
-      "type": "image/svg+xml",
-      "purpose": "maskable"
     }
-  ]
+  ],
+  "id": "/"
 }

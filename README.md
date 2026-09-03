@@ -40,7 +40,7 @@ LooDoo tries to capture the feeling of the Ludo we grew up playing.
 | 👥 বন্ধুদের সাথে Online Multiplayer | Real-time online multiplayer |
 | 📱 এক ফোনে ২-৪ জন | 2-4 player Pass & Play |
 | 🤖 AI-এর বিরুদ্ধে খেলা | Play against AI |
-| 😂 বাংলা মজার Soundboard | Fun Bangla soundboard & reactions |
+| 🎤 আওয়াজ দাও (Voice Clips) | Hold to talk - 3s voice clips sent instantly |
 | ⚔️ 2v2 Team Battle | 2v2 partnership matches |
 | 🐍 সাপ-লুডু | Bangladeshi-inspired Snakes & Ladders |
 | 🏆 XP, Level & Achievements | XP, levels & achievements |
@@ -117,25 +117,28 @@ Communication, strategy and a little bit of luck can decide everything.
 
 ---
 
-😂 BANGLA FUN SOUNDBOARD
+🎤 আওয়াজ দাও (AWAZ DAO - HOLD TO TALK)
 
 Ludo without teasing isn't really Ludo. 😄
 
-LooDoo adds Bangla-inspired reactions and playful voice clips to make matches more entertaining.
+Why type when you can just say it? **Press and hold the mic, talk for up to 3
+seconds, release - and everyone in the room hears you instantly.**
 
-🎲 "ছক্কা মার রে ভাই!"
+🎙️ Hold the mic button to record (max 3 seconds)
 
-⚔️ "ঘুঁটি কাটার ওস্তাদ আমি!"
+⚡ Delivered in well under a second over the peer-to-peer data channel
 
-🏃 "পালাবি কোথায় এবার?"
+🔊 Plays automatically on every device in the room
 
-😲 "আরে ভাই, কী চাল দিলেন!"
+🔇 One global mute switch, plus a per-player mute on every player card
 
-👑 "লুডু খেলার রাজা আমি!"
+🚫 Rate limited (one clip every 4 seconds) so nobody can spam the room
 
-🔥 "ম্যাচ কিন্তু জমে গেছে!"
+🔒 Ephemeral by design: clips travel peer to peer and never get stored - the
+Firestore fallback deletes each clip the moment it is consumed
 
-And more fun reactions to make your matches feel like a real Bangladeshi adda.
+Mic permission is optional: deny it and the button simply steps aside, leaving
+emoji reactions and the soundboard-free UI fully working.
 
 ---
 
@@ -383,7 +386,7 @@ LooDoo combines modern frontend technology with real-time multiplayer infrastruc
 | 🔥 Firebase Firestore | Real-time cloud persistence & room discovery |
 | 🔐 Firebase Authentication | Guest authentication & sessions |
 | 🎨 HTML5 Canvas | Match summary generation |
-| 🔊 Web Audio API | Game sounds & Bangla soundboard |
+| 🔊 Web Audio API + MediaRecorder | Game sounds & 3s voice clips |
 | 📦 PWA | Installable web experience |
 | ☁️ Vercel | Hosting & deployment |
 
@@ -417,6 +420,104 @@ npm run dev
 ```
 
 The development server will then be available through the local Vite URL.
+
+---
+
+🏗️ ARCHITECTURE
+
+Every mode (online multiplayer, offline pass & play, and the AI) funnels through
+one deterministic rules engine, so a move that is legal offline is legal online:
+
+```
+      UI (React)                     components/ + App.tsx
+          │
+          ▼
+      Engine  ──────────────────►   game-engine/engine.ts   (pure geometry & rules)
+          │                         game-engine/reducer.ts  (createGameDocument,
+          │                                                  applyRollDice,
+          │                                                  applyTokenMove,
+          │                                                  applyTurnTimeout)
+          ▼
+      Validation ───────────────►   game-engine/validation.ts
+          │                         validateGameDocument / validateTransition
+          ▼
+      State ───────────────────►    game-engine/ai.ts (bots & auto-move are just
+          │                         clients of the same engine)
+          ▼
+      Persistence / Transport ──►   services/gameService.ts (Firestore)
+                                    services/p2pMeshService.ts (WebRTC data mesh)
+```
+
+Key properties:
+
+- The engine is pure and versioned: every action returns a **new** `GameDocument`
+  with `version + 1`. No mutation, no hidden state, so simulations and tests are
+  reproducible with a seeded PRNG.
+- Animation lives in the UI layer only (`DiceComponent`, `BoardToken`), so a slow
+  or interrupted animation can never drop or replay a move.
+- Firestore is the source of truth for online rooms; the WebRTC mesh is an
+  optional latency optimisation for reactions and must never be required for
+  gameplay.
+
+---
+
+✅ TESTING
+
+```bash
+npm test            # whole suite (jsdom for UI tests, node for engine/services)
+npm run test:watch  # watch mode
+npm run typecheck   # tsc --noEmit
+npm run build       # production bundle
+```
+
+157 tests across 11 files:
+
+| Suite | What it proves |
+| :--- | :--- |
+| `src/game-engine/engine.test.ts` | board geometry, safe cells, captures, blockades, home paths |
+| `src/game-engine/reducer.test.ts` | turn flow, 6-to-leave-yard, consecutive sixes, timeouts, win detection |
+| `tests/snakeLadder.test.ts` | Snakes & Ladders branch of the engine (exactly 100, no overshoot) |
+| `tests/fullGame.test.ts` | seeded full matches for 2/3/4 players, Rush and 2v2 |
+| `tests/ai.test.ts` | bots only play legal moves, prefer captures/home, team awareness |
+| `tests/onlineMultiplayer.test.ts` | 2/3/4 clients, admin rules, sync, stale-write rejection, rematch, reconnect |
+| `tests/offlinePassAndPlay.test.tsx` | pass & play boots and plays with Firebase fully mocked out |
+| `tests/p2pMesh.test.ts` | signalling, chunked voice clips, teardown, and "WebRTC failure never breaks gameplay" |
+| `tests/voiceClip.test.ts` | আওয়াজ দাও: recording, 3s cap, chunking/reassembly, rate limit, muting, Firestore fallback |
+| `tests/awazDao.ui.test.tsx` | the hold-to-talk button end to end with faked browser media APIs |
+| `tests/staticConfig.test.ts` | security rules, manifest/PWA wiring and scorecard honesty |
+
+Online multiplayer is tested against an in-memory Firestore double
+(`tests/helpers/fakeFirestore.ts`) so races, stale snapshots and reconnect
+behaviour are exercised without a network.
+
+---
+
+🔐 SECURITY RULES
+
+`firestore.rules` requires authentication for every operation and additionally
+enforces:
+
+- rooms, game documents and history can never be deleted;
+- only the room admin may create a room or start a match;
+- a game may only be advanced by a room member who owns the turn (or the admin,
+  for timeouts and AI-driven bots);
+- `version` must increase by exactly one — this blocks replayed, duplicated and
+  out-of-order writes (the classic last-write-wins corruption);
+- identity fields (`gameId`, `roomId`, `playerOrder`, `startedAt`) are immutable
+  and a finished match cannot be reopened;
+- token documents must keep a legal shape and the roster cannot change mid-match;
+- a user may only read and write their own profile document.
+
+Deploy them with:
+
+```bash
+firebase deploy --only firestore:rules
+```
+
+**Residual risk (accepted):** because the game is client-authoritative, a
+malicious room member can still post an illegal board position. Closing that gap
+requires a trusted referee — move the reducer into Cloud Functions (or a small
+game server) and have it be the only writer of `rooms/{roomId}/games/{gameId}`.
 
 ---
 

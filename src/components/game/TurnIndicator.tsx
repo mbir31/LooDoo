@@ -10,6 +10,8 @@ interface TurnIndicatorProps {
   players: Record<string, RoomPlayer>;
   myUid: string;
   language: Language;
+  /** Offline pass-and-play has no server room: never call the timeout service. */
+  timeoutEnabled?: boolean;
 }
 
 const COLOR_THEME: Record<PlayerColor, {
@@ -49,6 +51,7 @@ export const TurnIndicator: React.FC<TurnIndicatorProps> = ({
   players,
   myUid,
   language,
+  timeoutEnabled = true,
 }) => {
   const [timeLeft, setTimeLeft] = useState(30);
 
@@ -62,16 +65,17 @@ export const TurnIndicator: React.FC<TurnIndicatorProps> = ({
       const remaining = Math.max(0, Math.ceil((game.turnExpiresAt - Date.now()) / 1000));
       setTimeLeft(remaining);
 
-      // Auto trigger timeout pass if turn expired by >2s and this user is current player or admin
-      if (remaining === 0 && game.status !== 'GAME_OVER') {
-        handleTurnTimeout(game.roomId, game.gameId).catch(() => {});
+      // The service only accepts a timeout from the player owning the turn or
+      // the room admin, so several clients cannot skip the same turn twice.
+      if (timeoutEnabled && remaining === 0 && game.status !== 'GAME_OVER') {
+        handleTurnTimeout(game.roomId, game.gameId, myUid).catch(() => {});
       }
     };
 
     checkTimer();
     const interval = setInterval(checkTimer, 1000);
     return () => clearInterval(interval);
-  }, [game.turnExpiresAt, game.roomId, game.gameId, game.status]);
+  }, [game.turnExpiresAt, game.roomId, game.gameId, game.status, myUid, timeoutEnabled]);
 
   const totalTime = 30;
   const progressPercent = Math.min(100, Math.max(0, (timeLeft / totalTime) * 100));

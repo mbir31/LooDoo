@@ -116,11 +116,20 @@ export interface PlayerTokens {
   };
 }
 
+/** Per-player counters accumulated during a single match (authoritative, never randomised). */
+export interface PlayerMatchStats {
+  sixesRolled: number;
+  capturesMade: number;
+  tokensHome: number;
+}
+
 export interface GameDocument {
   gameId: string;
   roomId: string;
   gameMode?: GameMode;
   winningTeam?: TeamId | null;
+  /** Real per-player match counters (sixes / captures / tokens home). */
+  stats?: Record<string, PlayerMatchStats>;
   status: GameStatus;
   playerOrder: string[]; // array of uids in turn order
   currentPlayerUid: string;
@@ -206,6 +215,18 @@ export interface ReactionEvent {
   tauntTextBn?: string;
   tauntTextEn?: string;
   timestamp: number;
+}
+
+export interface VoiceClip {
+  clipId: string;
+  uid: string;
+  displayName: string;
+  avatar?: string;
+  mimeType: string;
+  durationMs: number;
+  /** Base64 encoded audio, no data-url prefix. */
+  data: string;
+  createdAt: number;
 }
 
 export interface GameHistoryRecord {

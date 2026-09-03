@@ -31,27 +31,17 @@ export interface SnakeLadderBoardProps {
   } | null;
 }
 
-// Classical Bangladeshi Snake & Ladder (সাপ লুডু) Map
-export const SNAKES_MAP: Record<number, number> = {
-  98: 79,
-  95: 75,
-  93: 73,
-  87: 36,
-  64: 60,
-  62: 19,
-  54: 34,
-  17: 7,
-};
+// Classical Bangladeshi Snake & Ladder (সাপ লুডু) Map.
+// The tables live in the game-engine so that the rules engine, the online
+// service, the AI driver and this board can never drift apart.
+import {
+  SNAKES_MAP as ENGINE_SNAKES_MAP,
+  LADDERS_MAP as ENGINE_LADDERS_MAP,
+  getCellCoords,
+} from '../../game-engine/snakeLadder';
 
-export const LADDERS_MAP: Record<number, number> = {
-  4: 14,
-  9: 31,
-  21: 42,
-  28: 84,
-  51: 67,
-  72: 91,
-  80: 99,
-};
+export const SNAKES_MAP: Record<number, number> = ENGINE_SNAKES_MAP;
+export const LADDERS_MAP: Record<number, number> = ENGINE_LADDERS_MAP;
 
 // Rich Bangladeshi Snake Vernacular Metadata
 export interface SnakeInfo {
@@ -256,18 +246,8 @@ export function toBengaliNumber(num: number): string {
 // Row 0 is Top (tiles 100..91)
 // Row 9 is Bottom (tiles 1..10)
 export function getTileGridPosition(tile: number): { row: number; col: number } {
-  const t = Math.max(1, Math.min(100, tile));
-  const rowFromBottom = Math.floor((t - 1) / 10);
-  const row = 9 - rowFromBottom;
-  const indexInRow = (t - 1) % 10;
-
-  // Row 0 from bottom (1..10) goes Left -> Right
-  // Row 1 from bottom (11..20) goes Right -> Left
-  // Row 2 from bottom (21..30) goes Left -> Right
-  // ...
-  // Row 9 from bottom (91..100) goes Right -> Left (tile 100 is at col 0, tile 91 is at col 9)
-  const col = rowFromBottom % 2 === 0 ? indexInRow : 9 - indexInRow;
-
+  // Delegates to the shared engine helper; grid layout docs live there.
+  const [row, col] = getCellCoords(tile);
   return { row, col };
 }
 

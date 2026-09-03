@@ -1,9 +1,344 @@
 rules_version = '2';
+
+// -----------------------------------------------------------------------------
+// LooDoo : লুডু - Firestore security rules
+//
+// Threat model: LooDoo is a client-authoritative real-time game, so rules alone
+// cannot verify every Ludo move server-side (that needs a trusted game server).
+// What these rules DO guarantee:
+//
+//   * every write is made by an authenticated user;
+//   * rooms and game documents can only be created by the room admin;
+//   * a game document may only be advanced by a member of that match, and only
+//     by the player who owns the turn (or the room admin, for timeouts/bots);
+//   * the version counter must increase by exactly one, which kills
+//     last-write-wins races, replayed actions and duplicate submissions;
+//   * immutable identity fields (gameId, roomId, playerOrder, startedAt) can
+//     never be rewritten, and a finished match can never be reopened;
+//   * token documents must keep a legal shape (4 tokens/player, valid zone and
+//     progress ranges) and the roster can never change mid-match;
+//   * users may only ever read and write their own profile.
+//
+// Remaining (accepted) risk: a malicious room member can still post an illegal
+// board position. Removing that requires moving the reducer into a trusted
+// environment (Cloud Functions or a dedicated game server) - see README.
+// -----------------------------------------------------------------------------
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Allow players (both guest and authenticated) to create and join rooms, update board state, send voice signals
-    match /{document=**} {
-      allow read, write: if true;
+
+    // ------------------------------ helpers ---------------------------------
+    function signedIn() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function me() {
+      return request.auth.uid;
+    }
+
+    function roomData(roomId) {
+      return get(/databases/$(database)/documents/rooms/$(roomId)).data;
+    }
+
+    function playerPath(roomId, uid) {
+      return /databases/$(database)/documents/rooms/$(roomId)/players/$(uid);
+    }
+
+    function isRoomMember(roomId) {
+      return signedIn() && exists(playerPath(roomId, me()));
+    }
+
+    function isBotUid(uid) {
+      return uid is string && uid.matches('^bot_[A-Za-z0-9_-]+$');
+    }
+
+    function validSlots() {
+      return ['P1', 'P2', 'P3', 'P4'];
+    }
+
+    function validColors() {
+      return ['red', 'green', 'yellow', 'blue'];
+    }
+
+    function validZones() {
+      return ['YARD', 'TRACK', 'HOME_PATH', 'HOME'];
+    }
+
+    function validGameStatuses() {
+      return [
+        'WAITING_FOR_PLAYERS', 'READY_CHECK', 'STARTING', 'AWAITING_ROLL',
+        'DICE_ROLLED', 'AWAITING_TOKEN_SELECTION', 'MOVING_TOKEN',
+        'RESOLVING_CAPTURE', 'EXTRA_ROLL', 'PLAYER_FINISHED', 'GAME_OVER',
+        'REMATCH'
+      ];
+    }
+
+    function validRoomStatuses() {
+      return ['OPEN', 'READY', 'PLAYING', 'FINISHED', 'IDLE', 'ARCHIVED'];
+    }
+
+    // --------------------------- user profiles ------------------------------
+    match /users/{uid} {
+      allow read: if signedIn() && me() == uid;
+      allow create: if signedIn() && me() == uid && request.resource.data.uid == uid;
+      allow update: if signedIn() && me() == uid && request.resource.data.uid == uid;
+      allow delete: if false;
+    }
+
+    // ------------------------------- rooms ----------------------------------
+    match /rooms/{roomId} {
+      // Anyone holding the 6-digit code may read the room (needed to join).
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+        && request.resource.data.adminUid == me()
+        && request.resource.data.roomId == roomId
+        && request.resource.data.status in ['OPEN', 'PLAYING']
+        && request.resource.data.maxPlayers >= 2
+        && request.resource.data.maxPlayers <= 4
+        && request.resource.data.keys().hasOnly([
+             'roomId', 'roomCode', 'adminUid', 'status', 'maxPlayers',
+             'createdAt', 'updatedAt', 'currentGameId', 'lastGameId', 'settings'
+           ]);
+
+      allow update: if signedIn()
+        && request.resource.data.status in validRoomStatuses()
+        && request.resource.data.adminUid is string
+        && (
+             // The admin may change anything (settings, status, current game).
+             resource.data.adminUid == me()
+             // Players may only bump the heartbeat.
+             || (isRoomMember(roomId)
+                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt']))
+             // Safety valve: a member may claim an abandoned room.
+             || (isRoomMember(roomId)
+                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['adminUid', 'updatedAt'])
+                 && exists(playerPath(roomId, resource.data.adminUid))
+                 && get(playerPath(roomId, resource.data.adminUid)).data.status == 'left'
+                 && request.resource.data.adminUid == me())
+           );
+
+      allow delete: if false;
+
+      // -------------------------- room players ------------------------------
+      match /players/{playerUid} {
+        allow read: if signedIn();
+
+        allow create: if signedIn()
+          && (playerUid == me() || isBotUid(playerUid))
+          && request.resource.data.uid == playerUid
+          && request.resource.data.slot in validSlots()
+          && request.resource.data.color in validColors()
+          && request.resource.data.status == 'active'
+          && request.resource.data.keys().hasOnly([
+               'uid', 'playerId', 'slot', 'displayName', 'color', 'avatar',
+               'tokenTheme', 'teamId', 'ready', 'connected', 'status',
+               'joinedAt', 'lastSeenAt', 'sixesRolled', 'capturesMade',
+               'customColorHex'
+             ]);
+
+        allow update: if signedIn() && (
+            // Players control their own presence, readiness and cosmetics.
+            (playerUid == me()
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                   'ready', 'connected', 'status', 'lastSeenAt', 'displayName',
+                   'avatar', 'tokenTheme', 'customColorHex', 'sixesRolled',
+                   'capturesMade'
+                 ]))
+            // The admin may rename / recolour anybody in the room.
+            || roomData(roomId).adminUid == me()
+          );
+
+        allow delete: if signedIn()
+          && (playerUid == me() || roomData(roomId).adminUid == me());
+      }
+
+      // ------------------------- authoritative game -------------------------
+      match /games/{gameId} {
+        allow read: if signedIn();
+
+        allow create: if signedIn()
+          && roomData(roomId).adminUid == me()
+          && request.resource.data.gameId == gameId
+          && request.resource.data.roomId == roomId
+          && request.resource.data.status in validGameStatuses()
+          && request.resource.data.playerOrder is list
+          && request.resource.data.playerOrder.size() >= 2
+          && request.resource.data.playerOrder.size() <= 4
+          && request.resource.data.playerOrder.hasAll([me()])
+          && request.resource.data.currentPlayerUid in request.resource.data.playerOrder
+          && request.resource.data.version == 1
+          && request.resource.data.diceRolled == false;
+
+        allow update: if signedIn()
+          && isRoomMember(roomId)
+          && isValidGameUpdate(resource.data, request.resource.data);
+
+        allow delete: if false;
+      }
+
+      // ------------------------- match history ------------------------------
+      match /history/{gameId} {
+        allow read: if signedIn();
+        allow create: if signedIn() && isRoomMember(roomId)
+          && request.resource.data.gameId == gameId
+          && request.resource.data.roomId == roomId;
+        allow update, delete: if false;
+      }
+
+      // ---------------------- reactions / soundboard ------------------------
+      match /reactions/{reactionId} {
+        allow read: if signedIn();
+        allow create: if signedIn() && isRoomMember(roomId)
+          && request.resource.data.uid == me()
+          && request.resource.data.keys().hasOnly([
+               'id', 'uid', 'displayName', 'emoji', 'tauntId', 'tauntTextBn',
+               'tauntTextEn', 'timestamp'
+             ]);
+        allow delete: if signedIn()
+          && (resource.data.uid == me() || roomData(roomId).adminUid == me());
+        allow update: if false;
+      }
+
+      // ------------------- "আওয়াজ দাও" voice clips -------------------------
+      // Ephemeral: a 3 second recording is consumed and deleted straight away.
+      // The payload is capped so the collection can never be used as storage.
+      match /voiceClips/{clipId} {
+        allow read: if signedIn() && isRoomMember(roomId);
+        allow create: if signedIn()
+          && isRoomMember(roomId)
+          && request.resource.data.uid == me()
+          && request.resource.data.keys().hasOnly([
+               'clipId', 'uid', 'displayName', 'avatar', 'mimeType',
+               'durationMs', 'data', 'createdAt'
+             ])
+          && request.resource.data.mimeType in [
+               'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus',
+               'audio/mp4', 'audio/mpeg'
+             ]
+          && request.resource.data.durationMs is int
+          && request.resource.data.durationMs >= 100
+          && request.resource.data.durationMs <= 4000
+          && request.resource.data.data is string
+          && request.resource.data.data.size() <= 32768 // 24 KB of audio
+          && request.resource.data.createdAt is int;
+        // The sender or the admin may clear a clip (and clients delete on read).
+        allow delete: if signedIn()
+          && (resource.data.uid == me() || roomData(roomId).adminUid == me());
+        allow update: if false;
+      }
+
+      // ------------------------ WebRTC signalling ---------------------------
+      // Firebase is discovery/signalling only: gameplay data and (optionally)
+      // audio travel peer to peer over WebRTC data channels.
+      match /p2pPresence/{peerUid} {
+        allow read: if signedIn() && isRoomMember(roomId);
+        allow create, update: if signedIn()
+          && (peerUid == me() || isBotUid(peerUid));
+        allow delete: if signedIn() && peerUid == me();
+      }
+
+      match /p2pSignals/{signalId} {
+        // NOTE: the client queries `where('toUid', '==', me)`. A per-document
+        // `toUid == me() || fromUid == me()` guard cannot be proven from that
+        // single constraint, so reads are scoped to room members instead while
+        // create/delete stay strictly per-peer below.
+        allow read: if signedIn() && isRoomMember(roomId);
+        allow create: if signedIn()
+          && isRoomMember(roomId)
+          && request.resource.data.fromUid == me()
+          && request.resource.data.keys().hasOnly([
+               'id', 'fromUid', 'toUid', 'type', 'payload', 'createdAt'
+             ]);
+        // The recipient deletes a signal once it has been processed.
+        allow delete: if signedIn()
+          && (resource.data.toUid == me() || resource.data.fromUid == me());
+        allow update: if false;
+      }
+    }
+
+    // ------------------------- game transition rules ------------------------
+    function isValidGameUpdate(before, after) {
+      // Immutable identity: a match can never be re-keyed or re-seeded.
+      return after.gameId == before.gameId
+        && after.roomId == before.roomId
+        && after.startedAt == before.startedAt
+        && after.playerOrder == before.playerOrder
+        && (!after.keys().hasAll(['gameMode']) || after.gameMode == before.gameMode)
+        // Strict versioning: exactly one step forward - no replays, no skips.
+        && after.version is int
+        && after.version == before.version + 1
+        // Roster and turn integrity.
+        && after.currentPlayerUid in after.playerOrder
+        && after.status in validGameStatuses()
+        && (after.winnerUid == null || after.winnerUid in after.playerOrder)
+        && (after.diceValue == null
+            || (after.diceValue is int && after.diceValue >= 1 && after.diceValue <= 6))
+        && after.diceRolled is bool
+        && (after.consecutiveSixes == null
+            || (after.consecutiveSixes is int && after.consecutiveSixes >= 0 && after.consecutiveSixes <= 3))
+        && (!after.keys().hasAll(['rankings'])
+            || after.rankings.size() <= after.playerOrder.size())
+        && (!after.keys().hasAll(['snakePositions'])
+            || validSnakePositions(after))
+        // Only the player on turn - or the room admin, for timeouts and bots -
+        // may advance the match.
+        && (before.currentPlayerUid == me() || roomData(before.roomId).adminUid == me())
+        // A finished match is final.
+        && !(before.status == 'GAME_OVER' && after.status != 'GAME_OVER')
+        && validTokenShape(after)
+        && onlyMutableGameFieldsChanged(before, after);
+    }
+
+    function onlyMutableGameFieldsChanged(before, after) {
+      return after.diff(before).affectedKeys().hasOnly([
+        'status', 'currentPlayerUid', 'turnNumber', 'diceValue', 'diceRolled',
+        'consecutiveSixes', 'turnStartedAt', 'turnExpiresAt', 'winnerUid',
+        'winningTeam', 'rankings', 'tokens', 'stats', 'snakePositions',
+        'snakeLastEvent', 'version', 'endedAt', 'lastAction', 'lastActionAt',
+        'lastCapturedToken', 'turnMessage'
+      ]);
+    }
+
+    function validSnakePositions(game) {
+      return game.snakePositions.keys().hasOnly(game.playerOrder)
+        && game.snakePositions[game.playerOrder[0]] >= 1
+        && game.snakePositions[game.playerOrder[0]] <= 100
+        && (game.playerOrder.size() < 2 || validSnakePos(game.snakePositions, game.playerOrder[1]))
+        && (game.playerOrder.size() < 3 || validSnakePos(game.snakePositions, game.playerOrder[2]))
+        && (game.playerOrder.size() < 4 || validSnakePos(game.snakePositions, game.playerOrder[3]));
+    }
+
+    function validSnakePos(positions, uid) {
+      return positions[uid] >= 1 && positions[uid] <= 100;
+    }
+
+    // Four tokens per player, legal zone/progress ranges, static roster.
+    function validTokenShape(game) {
+      return game.tokens.keys().hasOnly(game.playerOrder)
+        && validPlayerTokens(game.tokens, game.playerOrder[0])
+        && (game.playerOrder.size() < 2 || validPlayerTokens(game.tokens, game.playerOrder[1]))
+        && (game.playerOrder.size() < 3 || validPlayerTokens(game.tokens, game.playerOrder[2]))
+        && (game.playerOrder.size() < 4 || validPlayerTokens(game.tokens, game.playerOrder[3]));
+    }
+
+    function validPlayerTokens(tokens, uid) {
+      return tokens[uid].keys().hasOnly(['0', '1', '2', '3'])
+        && validToken(tokens[uid]['0'])
+        && validToken(tokens[uid]['1'])
+        && validToken(tokens[uid]['2'])
+        && validToken(tokens[uid]['3']);
+    }
+
+    function validToken(t) {
+      return t.id is int
+        && t.id >= 0 && t.id <= 3
+        && t.progress is int
+        && t.zone in validZones()
+        && (t.zone != 'YARD' || t.progress == -1)
+        && (t.zone != 'TRACK' || (t.progress >= 0 && t.progress <= 50))
+        && (t.zone != 'HOME_PATH' || (t.progress >= 51 && t.progress <= 55))
+        && (t.zone != 'HOME' || t.progress == 56);
     }
   }
 }
