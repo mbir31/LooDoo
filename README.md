@@ -87,19 +87,22 @@ Perfect for:
 
 ---
 
-🐍 3. Bangladeshi Snakes & Ladders
+🐍 3. Bangladeshi Snakes & Ladders (আধুনিক সাপ-লুডু)
 
-🇧🇩 পরিচিত সাপ-লুডু, বাংলাদেশি আবহে
+🇧🇩 পরিচিত সাপ-লুডু, আধুনিক ও মার্জিত ডিজাইনে
 
-A nostalgic 100-cell Snakes & Ladders board redesigned with Bangladeshi visual inspiration.
+A nostalgic 100-cell Snakes & Ladders board redesigned with polished modern layouts, high-precision geometry, and authentic Bangladeshi cultural vernacula:
 
-🐍 Indigenous snake-inspired artwork  
-🪵 Bamboo & wooden ladder aesthetics  
-🔢 বাংলা + English numerals  
-🎨 Multiple board styles  
-🔊 Dynamic sound effects  
+🐍 **Handcrafted Serpentine Visuals**: Sinuous undulating 3D snake paths with species-specific gradients (বিষাক্ত কালনাগিনী, পদ্মগোখরো, হলুদ শঙ্খিনী, সুন্দরবনের মহা অজগর, রাসেল ভাইপার/চন্দ্রবোড়া, জলঢোঁড়া, ঘাস সাপ, দাঁড়াশ সাপ), flared cobra hoods, vertical slit eyes, and venomous fangs.
+🪵 **Realistic 3D Bamboo & Hardwood Ladders**: Dual parallel rails with cylindrical lighting, bamboo knots, specular highlights, and golden brass fastener rivets.
+🧭 **Interactive Path Guide (পথ নির্দেশিকা)**: Toggleable neon guide lines tracing the ascent and descent trajectories across the board.
+🎨 **Curated Theme Palettes**: Switch effortlessly between *স্বর্ণালী (Heritage Gold)*, *অবসিডিয়ান (Obsidian Neon)*, and *রাজকীয় (Royal Gem)*.
+🔢 **High-Contrast Bengali & English Numerals**: Primary bold Bengali numerals optically centered on each micro-surface tile with bilingual English index markers.
+📖 **Folklore & Danger Directory**: Interactive bottom inspector drawer and full-screen folklore modal with jump distances and traditional lore.
+🏆 **Celebration HUD**: Spring-animated glass celebration toasts with realistic climb and bite sound effects.
+👥 **3D Token Pedestals & Turn Beacons**: Elevated pawn tokens with multi-player non-clipping cluster offsets and pulsating turn radar.
 
-শৈশবের সাপ-লুডুর স্মৃতি, এবার ডিজিটাল বোর্ডে।
+শৈশবের সাপ-লুডুর স্মৃতি, এবার প্রিমিয়াম আধুনিক ডিজিটাল বোর্ডে।
 
 ---
 
@@ -458,6 +461,10 @@ Key properties:
 - Firestore is the source of truth for online rooms; the WebRTC mesh is an
   optional latency optimisation for reactions and must never be required for
   gameplay.
+- Real-time Audio & Clip De-duplication: Voice clips feature client-side TTL caching
+  and serial queue playback to prevent duplicate audio triggers across network channels.
+- UI View Optimization: Clean responsive layout with singular reactive control mounts
+  ensuring no redundant subscriptions or duplicate DOM rendering.
 
 ---
 

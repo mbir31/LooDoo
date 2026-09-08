@@ -405,6 +405,7 @@ async function pruneStaleClips(roomId: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const playbackQueue: Array<{ url: string; clip: VoiceClip }> = [];
+const recentlyPlayedClips = new Set<string>();
 let currentAudio: HTMLAudioElement | null = null;
 let onPlaybackChange: ((clip: VoiceClip | null) => void) | null = null;
 
@@ -414,6 +415,12 @@ export function setPlaybackListener(listener: ((clip: VoiceClip | null) => void)
 
 export function playVoiceClip(clip: VoiceClip): boolean {
   if (!clip?.data || isGlobalMuted() || isPlayerMuted(clip.uid)) return false;
+
+  if (clip.clipId) {
+    if (recentlyPlayedClips.has(clip.clipId)) return false;
+    recentlyPlayedClips.add(clip.clipId);
+    setTimeout(() => recentlyPlayedClips.delete(clip.clipId), 15_000);
+  }
 
   let url: string;
   try {

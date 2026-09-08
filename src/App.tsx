@@ -844,13 +844,22 @@ export default function App() {
 
                 <div className="flex items-center justify-between gap-2 mt-1">
                   <QuickReactions roomId={room.roomId} user={user} />
-                  <button
-                    onClick={() => setShowHistoryModal(true)}
-                    className="px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-neutral-300 hover:text-white hover:border-neutral-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <History className="w-3.5 h-3.5 text-amber-400" />
-                    <span>{getTranslation(language, 'myRooms')}</span>
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => setShowHistoryModal(true)}
+                      className="px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-neutral-300 hover:text-white hover:border-neutral-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <History className="w-3.5 h-3.5 text-amber-400" />
+                      <span>{getTranslation(language, 'myRooms')}</span>
+                    </button>
+                    <button
+                      onClick={handleLeaveRoom}
+                      className="p-2 rounded-xl bg-red-950/40 border border-red-800/60 text-red-400 hover:text-red-300 hover:bg-red-900/50 text-xs font-bold transition-colors cursor-pointer"
+                      title={getTranslation(language, 'leaveRoom')}
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -953,16 +962,22 @@ export default function App() {
                 })}
               </div>
 
-              {/* Mobile Quick Reactions & History Bar */}
+              {/* Mobile Top Navigation: History & Leave Room */}
               <div className="w-full flex items-center justify-between gap-2 px-1">
-                <QuickReactions roomId={room.roomId} user={user} />
                 <button
                   onClick={() => setShowHistoryModal(true)}
-                  className="px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-neutral-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                  className="px-3 py-1.5 rounded-xl bg-neutral-950 border border-neutral-800 text-neutral-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
                   title={getTranslation(language, 'myRooms')}
                 >
                   <History className="w-3.5 h-3.5 text-amber-400" />
                   <span>{getTranslation(language, 'myRooms')}</span>
+                </button>
+                <button
+                  onClick={handleLeaveRoom}
+                  className="px-2.5 py-1.5 rounded-xl bg-red-950/40 border border-red-800/60 text-red-400 text-xs font-bold flex items-center gap-1 active:scale-95 cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>{getTranslation(language, 'leaveRoom')}</span>
                 </button>
               </div>
 
@@ -1020,15 +1035,8 @@ export default function App() {
                   onRoll={handleRollDice}
                 />
 
-                <div className="flex items-center justify-between gap-2 pt-1 border-t border-neutral-850">
+                <div className="flex items-center justify-center pt-1 border-t border-neutral-850">
                   <QuickReactions roomId={room.roomId} user={user} />
-                  <button
-                    onClick={handleLeaveRoom}
-                    className="px-2.5 py-1.5 rounded-lg bg-red-950/40 border border-red-800/60 text-red-400 text-xs font-bold flex items-center gap-1 active:scale-95"
-                  >
-                    <LogOut className="w-3.5 h-3.5" />
-                    <span>{getTranslation(language, 'leaveRoom')}</span>
-                  </button>
                 </div>
               </div>
             </div>
