@@ -4,6 +4,8 @@ import confetti from 'canvas-confetti';
 import { GameDocument, RoomPlayer, Language, RoomDocument } from '../../types';
 import { getTranslation } from '../../i18n/translations';
 import { startRematch } from '../../services/gameService';
+import { computeFinalStandings } from '../../game-engine/engine';
+import { computeMatchXp } from '../../utils/progression';
 import { soundFx } from '../../utils/sound';
 import { MatchSummaryGenerator } from '../../utils/MatchSummaryGenerator';
 import {
@@ -42,13 +44,26 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
   language,
   onBackToLobby,
 }) => {
-  const winner = players[game.winnerUid || ''];
+  // Full standings: winners (both partners in 2v2) first, then the rest
+  // ordered by how far they got. `won` marks the entire winning side.
+  const standings = React.useMemo(() => computeFinalStandings(game), [game]);
+  const winners = standings.filter((s) => s.won);
+  const winnerNames = winners
+    .map((s) => players[s.uid]?.displayName || 'Player')
+    .join(' + ');
+  const winner = players[game.winnerUid || ''] || players[winners[0]?.uid || ''];
+  const iWon = winners.some((s) => s.uid === currentUserUid);
+  const isTeamMode = Boolean(game.winningTeam);
   const isAdmin = room.adminUid === currentUserUid;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [copied, setCopied] = useState(false);
   const [downloadingImg, setDownloadingImg] = useState(false);
   const [previewCardUrl, setPreviewCardUrl] = useState<string | null>(null);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
+
+  // Exact XP the current player earned (same formula as the award pipeline).
+  const myStats = game.stats?.[currentUserUid];
+  const earnedXp = computeMatchXp(iWon, myStats?.capturesMade ?? 0, myStats?.sixesRolled ?? 0);
 
   useEffect(() => {
     soundFx.win();
@@ -163,7 +178,7 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
 
   const handleShareSummary = async () => {
     soundFx.click();
-    const shareText = `🎲 *LooDoo (লুডু) Match Summary*\n🏆 Winner: ${winner?.displayName || 'Champion'} 👑\n👥 Players: ${playerList.map((p) => p.displayName).join(', ')}\n⚡ Mode: ${room.settings?.gameMode || 'Classic'}\n\nPlay Real-Time Bangladeshi Ludo with friends! 🎮`;
+    const shareText = `🎲 *LooDoo (লুডু) Match Summary*\n🏆 Winner: ${winnerNames || winner?.displayName || 'Champion'} 👑\n👥 Players: ${playerList.map((p) => p.displayName).join(', ')}\n⚡ Mode: ${room.settings?.gameMode || 'Classic'}\n\nPlay Real-Time Bangladeshi Ludo with friends! 🎮`;
 
     if (navigator.share) {
       try {
@@ -188,7 +203,7 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
   const handleWhatsAppShare = () => {
     soundFx.click();
     const shareText = encodeURIComponent(
-      `🎲 *LooDoo (লুডু) Match Scorecard*\n🏆 Winner: ${winner?.displayName || 'Champion'} 👑\n👥 Players: ${playerList.map((p) => p.displayName).join(', ')}\nPlay Bangla & English Ludo Online: ${window.location.origin}`
+      `🎲 *LooDoo (লুডু) Match Scorecard*\n🏆 Winner: ${winnerNames || winner?.displayName || 'Champion'} 👑\n👥 Players: ${playerList.map((p) => p.displayName).join(', ')}\nPlay Bangla & English Ludo Online: ${window.location.origin}`
     );
     window.open(`https://api.whatsapp.com/send?text=${shareText}`, '_blank');
   };
@@ -217,6 +232,18 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
         transition={{ type: 'spring', damping: 25, stiffness: 300 }}
         className="relative z-20 bg-neutral-950 border border-neutral-800 w-full max-w-md rounded-3xl p-5 sm:p-6 shadow-2xl flex flex-col items-center gap-4 text-center my-auto"
       >
+        {/* Dismiss - the match-over bar keeps rematch & results reachable */}
+        <button
+          id="result-close-btn"
+          onClick={() => {
+            soundFx.click();
+            onBackToLobby();
+          }}
+          aria-label={language === 'bn' ? 'বন্ধ করুন' : 'Close'}
+          className="absolute top-3 right-3 p-2 rounded-full bg-neutral-900/90 border border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-600 transition-all cursor-pointer z-30"
+        >
+          <X className="w-4 h-4" />
+        </button>
         {/* Glowing Trophy Icon with Crown */}
         <div className="relative">
           <motion.div
@@ -236,53 +263,92 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
         </div>
 
         {/* Winner Announcement */}
-        <div>
+        <div className="w-full">
           <span className="text-xs font-bold uppercase tracking-widest text-amber-400">
             {getTranslation(language, 'winnerTitle')}
           </span>
           <h2 className="text-2xl sm:text-3xl font-black bg-gradient-to-r from-white via-amber-100 to-amber-400 bg-clip-text text-transparent mt-1">
-            {winner?.displayName || 'Player'}
+            {winnerNames || winner?.displayName || 'Player'}
           </h2>
+          {isTeamMode && game.winningTeam && (
+            <p className="text-[11px] font-bold text-amber-300/90 uppercase tracking-wider mt-1">
+              {game.winningTeam === 'TEAM_1'
+                ? (language === 'bn' ? 'দল: লাল + হলুদ' : 'Team: Red + Yellow')
+                : (language === 'bn' ? 'দল: সবুজ + নীল' : 'Team: Green + Blue')}
+            </p>
+          )}
           <p className="text-xs sm:text-sm text-neutral-400 mt-1">
             {getTranslation(language, 'playerWonMessage', {
-              name: winner?.displayName || 'Player',
+              name: winnerNames || winner?.displayName || 'Player',
             })}
           </p>
         </div>
 
-        {/* Level XP Earned Badge */}
+        {/* Level XP Earned Badge (exact amount the profile receives) */}
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs font-bold">
           <Flame className="w-4 h-4 text-amber-400 fill-amber-400" />
-          <span>+200 XP Awarded & Progress Saved! 🎖️</span>
+          <span>
+            {iWon
+              ? `+${earnedXp} XP ${language === 'bn' ? 'অর্জিত ও সংরক্ষিত!' : 'earned & saved!'} 🎖️`
+              : `+${earnedXp} XP ${language === 'bn' ? 'সংরক্ষিত!' : 'saved!'} 🎖️`}
+          </span>
         </div>
 
-        {/* Players Summary List */}
+        {/* Full Standings Table */}
         <div className="w-full bg-black/80 border border-neutral-800/80 rounded-2xl p-3 flex flex-col gap-2">
-          {game.playerOrder.map((uid) => {
-            const p = players[uid];
-            const isWinner = uid === game.winnerUid;
+          {standings.map((entry) => {
+            const p = players[entry.uid];
+            const isMe = entry.uid === currentUserUid;
+            const rankLabel =
+              entry.rank === 1
+                ? language === 'bn' ? 'বিজয়ী' : 'Winner'
+                : entry.rank === 2
+                ? language === 'bn' ? 'দ্বিতীয়' : '2nd'
+                : entry.rank === 3
+                ? language === 'bn' ? 'তৃতীয়' : '3rd'
+                : language === 'bn' ? 'চতুর্থ' : '4th';
 
             return (
               <div
-                key={uid}
+                key={entry.uid}
                 className={`flex items-center justify-between p-2 rounded-xl text-sm transition-all ${
-                  isWinner
+                  entry.won
                     ? 'bg-amber-500/20 border border-amber-500/40 font-bold shadow-inner'
                     : 'bg-neutral-900/60'
                 }`}
               >
                 <div className="flex items-center gap-2">
+                  <span
+                    className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-black shrink-0 ${
+                      entry.rank === 1
+                        ? 'bg-amber-400 text-neutral-950'
+                        : entry.rank === 2
+                        ? 'bg-slate-300 text-neutral-900'
+                        : entry.rank === 3
+                        ? 'bg-orange-700 text-white'
+                        : 'bg-neutral-800 text-neutral-400'
+                    }`}
+                  >
+                    {entry.rank}
+                  </span>
                   <span className="text-lg">{p?.avatar || '👤'}</span>
-                  <span className="text-white font-medium">{p?.displayName || 'Player'}</span>
+                  <span className="text-white font-medium">
+                    {p?.displayName || 'Player'}
+                    {isMe && (
+                      <span className="ml-1.5 text-[9px] px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/40">
+                        {language === 'bn' ? 'আপনি' : 'You'}
+                      </span>
+                    )}
+                  </span>
                 </div>
 
                 <div className="flex items-center gap-1.5 text-xs">
-                  {isWinner ? (
+                  {entry.won ? (
                     <span className="flex items-center gap-1 text-amber-400 font-bold bg-amber-400/10 px-2 py-0.5 rounded-full border border-amber-400/30">
-                      <Medal className="w-4 h-4" /> 1st Winner
+                      <Medal className="w-4 h-4" /> {rankLabel}
                     </span>
                   ) : (
-                    <span className="text-neutral-500">Runner-up</span>
+                    <span className="text-neutral-500">{rankLabel}</span>
                   )}
                 </div>
               </div>

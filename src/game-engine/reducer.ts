@@ -50,6 +50,12 @@ export interface GameContext {
   slotMap: Record<string, PlayerSlot>;
   /** uid -> display name (used for turn messages) */
   nameMap?: Record<string, string>;
+  /**
+   * Players who left the room mid-match. They keep their board presence
+   * (tokens stay capturable) but must never receive another turn, otherwise a
+   * leaver would stall the match until every turn timed out.
+   */
+  skipTurnUids?: readonly string[];
   /** Timestamp used for every `lastActionAt` / `turnStartedAt` of the transition. */
   now: number;
 }
@@ -255,7 +261,7 @@ export function applyRollDice(
 
   // Authentic Bangladeshi rule: three consecutive sixes cancel the turn.
   if (diceValue === 6 && consecutiveSixes >= 3 && ctx.settings.strictThreeSixRule) {
-    const nextUid = getNextPlayerUid(game.playerOrder, uid, game.tokens, tokensToWin);
+    const nextUid = getNextPlayerUid(game.playerOrder, uid, game.tokens, tokensToWin, ctx.skipTurnUids);
     const nextGame: GameDocument = {
       ...game,
       diceValue,
@@ -311,7 +317,7 @@ export function applyRollDice(
       return { game: nextGame, diceValue, legalMoves: [], action: 'DICE_ROLLED_EXTRA_NO_MOVES' };
     }
 
-    const nextUid = getNextPlayerUid(game.playerOrder, uid, game.tokens, tokensToWin);
+    const nextUid = getNextPlayerUid(game.playerOrder, uid, game.tokens, tokensToWin, ctx.skipTurnUids);
     const nextGame: GameDocument = {
       ...game,
       diceValue,
@@ -367,18 +373,46 @@ function applySnakeRoll(
   const now = ctx.now;
   const timeout = turnTimeoutMs(ctx.settings);
   const curPos = game.snakePositions?.[uid] ?? 1;
-  const newPos = curPos + diceValue;
   const name = displayName(ctx, uid);
 
-  if (newPos > 100) {
-    // Cannot overshoot 100 - a six still grants another roll.
-    const keepTurn = diceValue === 6;
-    const nextUid = keepTurn ? uid : getNextPlayerUid(game.playerOrder, uid, game.tokens, tokensToWin);
+  // Authentic rule (shared with Ludo): three consecutive sixes cancel the turn.
+  // Without this a lucky player could roll unlimited times in a row.
+  const consecutiveSixes = diceValue === 6 ? (game.consecutiveSixes || 0) + 1 : 0;
+  if (diceValue === 6 && consecutiveSixes >= 3 && ctx.settings.strictThreeSixRule) {
+    const nextUid = getNextPlayerUid(game.playerOrder, uid, game.tokens, tokensToWin, ctx.skipTurnUids);
     const nextGame: GameDocument = {
       ...game,
       diceValue,
       diceRolled: false,
-      consecutiveSixes: keepTurn ? (game.consecutiveSixes || 0) + 1 : 0,
+      consecutiveSixes: 0,
+      currentPlayerUid: nextUid,
+      turnNumber: game.turnNumber + 1,
+      status: 'AWAITING_ROLL',
+      turnStartedAt: now,
+      turnExpiresAt: now + timeout,
+      version: bumpVersion(game, ctx, 'THREE_SIX_PENALTY'),
+      lastAction: 'THREE_SIX_PENALTY',
+      lastActionAt: now,
+      turnMessage: {
+        en: 'Three 6s in a row! Turn cancelled and passed.',
+        bn: 'পরপর ৩ বার ৬! চাল বাতিল এবং পরবর্তী খেলোয়াড়ের পালা।',
+        type: 'penalty',
+      },
+    };
+    return { game: nextGame, diceValue, legalMoves: [], action: 'THREE_SIX_PENALTY' };
+  }
+
+  const newPos = curPos + diceValue;
+
+  if (newPos > 100) {
+    // Cannot overshoot 100 - a six still grants another roll.
+    const keepTurn = diceValue === 6;
+    const nextUid = keepTurn ? uid : getNextPlayerUid(game.playerOrder, uid, game.tokens, tokensToWin, ctx.skipTurnUids);
+    const nextGame: GameDocument = {
+      ...game,
+      diceValue,
+      diceRolled: false,
+      consecutiveSixes: keepTurn ? consecutiveSixes : 0,
       currentPlayerUid: nextUid,
       turnNumber: keepTurn ? game.turnNumber : game.turnNumber + 1,
       status: 'AWAITING_ROLL',
@@ -445,7 +479,7 @@ function applySnakeRoll(
       ...game,
       diceValue,
       diceRolled: false,
-      consecutiveSixes: (game.consecutiveSixes || 0) + 1,
+      consecutiveSixes,
       status: 'AWAITING_ROLL',
       turnStartedAt: now,
       turnExpiresAt: now + timeout,
@@ -464,7 +498,7 @@ function applySnakeRoll(
     return { game: nextGame, diceValue, legalMoves: [], action: 'SNAKE_MOVED_EXTRA_ROLL' };
   }
 
-  const nextUid = getNextPlayerUid(game.playerOrder, uid, game.tokens, tokensToWin);
+  const nextUid = getNextPlayerUid(game.playerOrder, uid, game.tokens, tokensToWin, ctx.skipTurnUids);
   const nextGame: GameDocument = {
     ...game,
     diceValue,
@@ -600,7 +634,8 @@ export function applyTokenMove(
     const rankings = [...game.rankings];
     for (const memberUid of finishedUids) {
       if (!rankings.some((r) => r.uid === memberUid)) {
-        rankings.push({ uid: memberUid, rank: rankings.length + 1, finishedAt: now });
+        // Winners always take rank 1 - in 2v2 both partners are champions.
+        rankings.push({ uid: memberUid, rank: 1, finishedAt: now });
       }
     }
 
@@ -683,7 +718,7 @@ export function applyTokenMove(
     };
   }
 
-  const nextUid = getNextPlayerUid(game.playerOrder, uid, tokens, tokensToWin);
+  const nextUid = getNextPlayerUid(game.playerOrder, uid, tokens, tokensToWin, ctx.skipTurnUids);
   const nextGame: GameDocument = {
     ...game,
     ...baseUpdate,
@@ -724,7 +759,7 @@ export function applyTurnTimeout(game: GameDocument, ctx: GameContext, now: numb
 
   const timeout = turnTimeoutMs(ctx.settings);
   const tokensToWin = getTokensToWin(ctx.settings);
-  const nextUid = getNextPlayerUid(game.playerOrder, game.currentPlayerUid, game.tokens, tokensToWin);
+  const nextUid = getNextPlayerUid(game.playerOrder, game.currentPlayerUid, game.tokens, tokensToWin, ctx.skipTurnUids);
 
   return {
     ...game,
@@ -765,4 +800,49 @@ export function getPartnerUid(uid: string, slotMap: Record<string, PlayerSlot>):
   if (!slot) return null;
   const team = getTeamId(slot);
   return Object.keys(slotMap).find((other) => other !== uid && getTeamId(slotMap[other]) === team) ?? null;
+}
+
+/**
+ * Immediately passes the turn when the owner of the current turn leaves the
+ * room mid-match. Without this the match would stall until the turn timer of a
+ * player who is no longer there expires.
+ *
+ * Returns the same game object when there is nothing to do (wrong uid, match
+ * already over), so callers can detect no-ops via reference equality.
+ */
+export function applyForfeitTurn(
+  game: GameDocument,
+  ctx: GameContext,
+  leavingUid: string,
+  now: number
+): GameDocument {
+  if (!game || game.status === 'GAME_OVER' || game.winnerUid) return game;
+  if (game.currentPlayerUid !== leavingUid) return game;
+
+  const timeout = turnTimeoutMs(ctx.settings);
+  const tokensToWin = getTokensToWin(ctx.settings);
+  const skip = [...(ctx.skipTurnUids ?? []), leavingUid];
+  const nextUid = getNextPlayerUid(game.playerOrder, leavingUid, game.tokens, tokensToWin, skip);
+  if (nextUid === leavingUid) return game; // nobody left to play - keep state
+
+  const name = displayName(ctx, leavingUid);
+  return {
+    ...game,
+    diceValue: null,
+    diceRolled: false,
+    consecutiveSixes: 0,
+    currentPlayerUid: nextUid,
+    turnNumber: game.turnNumber + 1,
+    status: 'AWAITING_ROLL',
+    turnStartedAt: now,
+    turnExpiresAt: now + timeout,
+    version: bumpVersion(game, ctx, 'TURN_TIMEOUT'),
+    lastAction: 'PLAYER_FORFEIT_TURN',
+    lastActionAt: now,
+    turnMessage: {
+      en: `${name} left the match - turn passed on.`,
+      bn: `${name} ম্যাচ ছেড়ে গেছেন - চাল পরবর্তী খেলোয়াড়কে দেওয়া হয়েছে।`,
+      type: 'penalty',
+    },
+  };
 }

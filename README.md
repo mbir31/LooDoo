@@ -439,7 +439,8 @@ one deterministic rules engine, so a move that is legal offline is legal online:
           │                         game-engine/reducer.ts  (createGameDocument,
           │                                                  applyRollDice,
           │                                                  applyTokenMove,
-          │                                                  applyTurnTimeout)
+          │                                                  applyTurnTimeout,
+          │                                                  applyForfeitTurn)
           ▼
       Validation ───────────────►   game-engine/validation.ts
           │                         validateGameDocument / validateTransition
@@ -468,6 +469,33 @@ Key properties:
 
 ---
 
+🛡️ PRODUCTION HARDENING
+
+The rules engine and transport layer enforce the behaviours a commercial
+multiplayer game has to get right:
+
+- **No stalled matches** - when the player who owns the turn leaves the room,
+  the turn is forfeited and passed on immediately (`applyForfeitTurn`); future
+  turns skip leavers entirely (`getNextPlayerUid` skip-set) while their tokens
+  stay on the board and remain capturable.
+- **Team champions** - in 2v2 Tag-Team *both* partners are crowned (rank 1),
+  in the standings, the XP/streak pipeline, the history record and the
+  shareable scorecard.
+- **One rules set everywhere** - the Snakes & Ladders three-consecutive-sixes
+  penalty matches the Ludo rule, so no mode allows unbounded extra rolls.
+- **Complete standings** - every finished match produces a full 2-4 player
+  placement table (winners first, then by tokens home / board progress).
+- **Tamper-proof commits** - local commits must be an exact single-step
+  transition of the shared reducer: stale or duplicated writes are ignored
+  idempotently and malformed documents are refused before they can touch the
+  authoritative board.
+- **Crash-safe UI** - a React render crash is caught by an `ErrorBoundary` and
+  shows a friendly bilingual recovery screen instead of a blank page.
+- **CI** - `.github/workflows/ci.yml` runs typecheck, the full test suite and a
+  production build on every push and pull request.
+
+---
+
 ✅ TESTING
 
 ```bash
@@ -475,14 +503,16 @@ npm test            # whole suite (jsdom for UI tests, node for engine/services)
 npm run test:watch  # watch mode
 npm run typecheck   # tsc --noEmit
 npm run build       # production bundle
+npm run verify      # typecheck + tests + production build (what CI runs)
 ```
 
-157 tests across 11 files:
+167 tests across 12 files:
 
 | Suite | What it proves |
 | :--- | :--- |
 | `src/game-engine/engine.test.ts` | board geometry, safe cells, captures, blockades, home paths |
 | `src/game-engine/reducer.test.ts` | turn flow, 6-to-leave-yard, consecutive sixes, timeouts, win detection |
+| `tests/productionRules.test.ts` | leaver turn-skipping & forfeits, team champions (rank 1), final standings, snake 3-six rule |
 | `tests/snakeLadder.test.ts` | Snakes & Ladders branch of the engine (exactly 100, no overshoot) |
 | `tests/fullGame.test.ts` | seeded full matches for 2/3/4 players, Rush and 2v2 |
 | `tests/ai.test.ts` | bots only play legal moves, prefer captures/home, team awareness |

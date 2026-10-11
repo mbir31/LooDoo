@@ -52,3 +52,119 @@ html, body, #root {
   padding-right: env(safe-area-inset-right, 0px);
 }
 
+
+/* ===========================================================================
+   LooDoo design system - commercial polish layer
+   =========================================================================== */
+
+:root {
+  --loodoo-amber: #f59e0b;
+  --loodoo-amber-soft: rgba(245, 158, 11, 0.14);
+  --loodoo-red: #ef4444;
+  --loodoo-emerald: #10b981;
+  --loodoo-surface: rgba(23, 23, 23, 0.72);
+  --loodoo-border: rgba(255, 255, 255, 0.08);
+  --loodoo-glow: 0 0 24px rgba(245, 158, 11, 0.18);
+}
+
+/* Animated aurora backdrop: slowly drifting colour fields behind the whole app.
+   Kept extremely dark so every surface above stays readable. */
+.aurora-bg {
+  position: relative;
+  isolation: isolate;
+}
+.aurora-bg::before {
+  content: '';
+  position: fixed;
+  inset: -20% -10% auto -10%;
+  height: 70vh;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(42% 55% at 12% 18%, rgba(239, 68, 68, 0.16), transparent 65%),
+    radial-gradient(46% 60% at 88% 12%, rgba(245, 158, 11, 0.14), transparent 65%),
+    radial-gradient(52% 62% at 70% 42%, rgba(16, 185, 129, 0.12), transparent 68%),
+    radial-gradient(40% 52% at 22% 52%, rgba(59, 130, 246, 0.10), transparent 66%);
+  filter: blur(28px) saturate(115%);
+  animation: aurora-drift 22s ease-in-out infinite alternate;
+}
+@keyframes aurora-drift {
+  0% { transform: translate3d(-2%, -1%, 0) scale(1); opacity: 0.85; }
+  50% { transform: translate3d(2%, 1.5%, 0) scale(1.06); opacity: 1; }
+  100% { transform: translate3d(-1%, 2%, 0) scale(1.02); opacity: 0.9; }
+}
+
+/* Frosted glass surface used by hero cards / panels layered over the aurora. */
+.glass-panel {
+  background: linear-gradient(160deg, rgba(28, 28, 30, 0.78), rgba(12, 12, 14, 0.88));
+  border: 1px solid var(--loodoo-border);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.glass-panel-amber {
+  border-color: rgba(245, 158, 11, 0.28);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), var(--loodoo-glow), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* Tactile press feedback for every interactive surface. */
+.btn-press {
+  transition: transform 0.12s ease, filter 0.18s ease, box-shadow 0.18s ease;
+}
+.btn-press:active {
+  transform: scale(0.965);
+}
+
+/* Accessible focus ring - keyboard users must never lose the cursor. */
+:where(button, a, [role='button'], input, select, textarea):focus-visible {
+  outline: 2px solid rgba(245, 158, 11, 0.85);
+  outline-offset: 2px;
+  border-radius: 12px;
+}
+
+/* Soft golden glow used on the dice and primary CTAs. */
+.glow-amber {
+  box-shadow: 0 0 18px rgba(245, 158, 11, 0.35), 0 0 48px rgba(245, 158, 11, 0.12);
+}
+.glow-emerald {
+  box-shadow: 0 0 18px rgba(16, 185, 129, 0.35), 0 0 48px rgba(16, 185, 129, 0.12);
+}
+
+/* Gradient headline text helper. */
+.text-ludo-gradient {
+  background: linear-gradient(92deg, #ef4444 0%, #f59e0b 42%, #fbbf24 58%, #10b981 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Refined scrollbars on desktop. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(245, 158, 11, 0.35) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(245, 158, 11, 0.3);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Respecting users who prefer less motion: freeze decorative animation. */
+@media (prefers-reduced-motion: reduce) {
+  .aurora-bg::before {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+  }
+}

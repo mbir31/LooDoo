@@ -378,26 +378,91 @@ export function countTokensHome(uid: string, tokens: GameDocument['tokens']): nu
 }
 
 /**
- * Determines next player in turn order, skipping players who have already finished
+ * Determines next player in turn order, skipping players who have already
+ * finished and players who left the room (`skipUids`).
+ *
+ * If every other player is skipped/finished the current player keeps the turn,
+ * so the game can never deadlock on a missing actor.
  */
 export function getNextPlayerUid(
   playerOrder: string[],
   currentPlayerUid: string,
   tokens: GameDocument['tokens'],
-  tokensToWin: number = 4
+  tokensToWin: number = 4,
+  skipUids?: ReadonlySet<string> | readonly string[] | null
 ): string {
   if (playerOrder.length === 0) return currentPlayerUid;
+  const skip: ReadonlySet<string> = skipUids
+    ? skipUids instanceof Set
+      ? skipUids
+      : new Set(skipUids as readonly string[])
+    : new Set<string>();
   const currentIdx = playerOrder.indexOf(currentPlayerUid);
   const total = playerOrder.length;
 
   for (let i = 1; i <= total; i++) {
     const nextIdx = (currentIdx + i) % total;
     const nextUid = playerOrder[nextIdx];
+    if (skip.has(nextUid)) continue;
     if (!hasPlayerWon(nextUid, tokens, tokensToWin)) {
       return nextUid;
     }
   }
   return currentPlayerUid;
+}
+
+/** One row of the end-of-match standings table shown on the result screen. */
+export interface StandingEntry {
+  uid: string;
+  rank: number;
+  /** True for every player on the winning side (both partners in 2v2). */
+  won: boolean;
+}
+
+/**
+ * Builds the full end-of-match standings (winners first, then everyone else
+ * ordered by how far they got).
+ *
+ * `game.rankings` intentionally records only the player(s) who actually
+ * finished; this helper derives display ranks 2..n for the rest so the result
+ * screen can show a complete table for 2-4 player games:
+ *   - Ludo:      sorted by tokens home, then total board progress.
+ *   - Snake:     sorted by board position (closer to 100 is better).
+ */
+export function computeFinalStandings(game: GameDocument): StandingEntry[] {
+  const winnerUids: string[] = [];
+  for (const r of game.rankings || []) {
+    if (r && typeof r.uid === 'string' && !winnerUids.includes(r.uid)) {
+      winnerUids.push(r.uid);
+    }
+  }
+  if (winnerUids.length === 0 && game.winnerUid) {
+    winnerUids.push(game.winnerUid);
+  }
+
+  // Only real snake & ladders matches rank by board position - classic games
+  // also carry a (unused) snakePositions map, so gameMode is the discriminator.
+  const isSnake = game.gameMode === 'SNAKE_LADDER';
+
+  const rest = game.playerOrder.filter((uid) => !winnerUids.includes(uid));
+  rest.sort((a, b) => progressScore(b) - progressScore(a) || a.localeCompare(b));
+
+  function progressScore(uid: string): number {
+    if (isSnake && game.snakePositions) {
+      return game.snakePositions[uid] ?? 0;
+    }
+    const home = countTokensHome(uid, game.tokens);
+    let progress = 0;
+    for (const t of Object.values(game.tokens?.[uid] || {})) {
+      progress += Math.max(0, t.progress);
+    }
+    return home * 1000 + progress;
+  }
+
+  const standings: StandingEntry[] = [];
+  winnerUids.forEach((uid) => standings.push({ uid, rank: 1, won: true }));
+  rest.forEach((uid, idx) => standings.push({ uid, rank: idx + 2, won: false }));
+  return standings;
 }
 
 /**

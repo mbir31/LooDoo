@@ -24,6 +24,7 @@ import {
   moveToken as serviceMoveToken,
   leaveRoom as serviceLeaveRoom,
   startGame as serviceStartGame,
+  startRematch as serviceStartRematch,
   joinRoom as serviceJoinRoom,
   createSoloRoom,
   handleTurnTimeout,
@@ -34,7 +35,7 @@ import {
   reconnectFirestoreAndSync,
 } from './services/gameService';
 import { p2pMeshService } from './services/p2pMeshService';
-import { getLegalMoves, countTokensHome } from './game-engine/engine';
+import { getLegalMoves, countTokensHome, computeFinalStandings } from './game-engine/engine';
 import { chooseBestToken } from './game-engine/ai';
 import { GameRuleError } from './game-engine/reducer';
 import { getTranslation } from './i18n/translations';
@@ -157,6 +158,9 @@ export default function App() {
   const [showTrophyModal, setShowTrophyModal] = useState(false);
   const [isPassAndPlayMode, setIsPassAndPlayMode] = useState(false);
   const [initialJoinCode, setInitialJoinCode] = useState('');
+  // The victory screen can be dismissed to inspect the final board; a compact
+  // "match over" bar then keeps rematch & re-open controls one tap away.
+  const [resultVisible, setResultVisible] = useState(false);
 
   const [authError, setAuthError] = useState<string | null>(null);
   const [syncIssue, setSyncIssue] = useState<string | null>(null);
@@ -475,7 +479,11 @@ export default function App() {
     awardedGameRef.current = game.gameId;
 
     const myStats = game.stats?.[user.uid];
-    const didWin = game.winnerUid === user.uid;
+    // In 2v2 Tag-Team BOTH partners are champions - rank 1 marks the whole
+    // winning side, so the partner must not be recorded as a loss.
+    const didWin =
+      game.winnerUid === user.uid ||
+      (game.rankings || []).some((r) => r.uid === user.uid && r.rank === 1);
 
     awardMatchStats(user, {
       won: didWin,
@@ -491,6 +499,15 @@ export default function App() {
   useEffect(() => {
     if (game && game.status !== 'GAME_OVER') {
       awardedGameRef.current = null;
+    }
+  }, [game?.gameId, game?.status]);
+
+  // Show the victory screen exactly once per finished match.
+  useEffect(() => {
+    if (game?.status === 'GAME_OVER') {
+      setResultVisible(true);
+    } else if (game) {
+      setResultVisible(false);
     }
   }, [game?.gameId, game?.status]);
 
@@ -724,7 +741,7 @@ export default function App() {
   const myColor = myPlayer?.color || 'red';
 
   return (
-    <div className="min-h-[100dvh] bg-black text-neutral-100 flex flex-col selection:bg-amber-500 selection:text-neutral-950 font-sans pt-safe pb-safe">
+    <div className="aurora-bg min-h-[100dvh] bg-black text-neutral-100 flex flex-col selection:bg-amber-500 selection:text-neutral-950 font-sans pt-safe pb-safe">
       {/* Top Navigation Header */}
       <Header
         user={user}
@@ -813,6 +830,56 @@ export default function App() {
         {/* VIEW 1: Active Game Board Screen */}
         {isGameActive && game && room && user && (
           <div>
+            {/* Compact "match over" bar - keeps results & rematch reachable after
+                the victory screen is dismissed to inspect the final board. */}
+            {game.status === 'GAME_OVER' && !resultVisible && (
+              <div className="w-full mb-3 rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-950/60 via-neutral-950 to-amber-950/60 px-3 py-2.5 flex flex-wrap items-center justify-between gap-2 shadow-lg shadow-black/50">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xl">🏆</span>
+                  <div className="min-w-0">
+                    <p className="text-[10px] uppercase tracking-widest text-amber-400 font-bold">
+                      {getTranslation(language, 'winnerTitle')}
+                    </p>
+                    <p className="text-sm font-black text-white truncate">
+                      {computeFinalStandings(game)
+                        .filter((s) => s.won)
+                        .map((s) => players[s.uid]?.displayName || 'Player')
+                        .join(' + ')}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 ml-auto">
+                  <button
+                    id="match-over-view-results-btn"
+                    onClick={() => {
+                      soundFx.click();
+                      setResultVisible(true);
+                    }}
+                    className="px-3 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all active:scale-95"
+                  >
+                    <Trophy className="w-3.5 h-3.5 text-amber-400" />
+                    <span>{language === 'bn' ? 'ফলাফল দেখুন' : 'View Results'}</span>
+                  </button>
+                  {room.adminUid === user.uid && (
+                    <button
+                      id="match-over-rematch-btn"
+                      onClick={async () => {
+                        soundFx.click();
+                        try {
+                          await serviceStartRematch(room.roomId, user.uid);
+                        } catch (err) {
+                          setActionError(localizeError(err));
+                        }
+                      }}
+                      className="px-3 py-2 rounded-xl bg-gradient-to-r from-red-600 via-amber-500 to-emerald-600 hover:brightness-110 text-white text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 shadow-md shadow-amber-500/20"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>{getTranslation(language, 'playAgain')}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
             {/* ================= DESKTOP 3-COLUMN LAYOUT (lg and above) ================= */}
             <div className="hidden lg:flex flex-row items-start justify-center gap-6 w-full">
               {/* Left Column: Player Cards, Reactions & Tools */}
@@ -1182,7 +1249,7 @@ export default function App() {
                     soundFx.click();
                     setShowCreateModal(true);
                   }}
-                  className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-red-600 via-amber-500 to-emerald-600 hover:brightness-110 text-white font-black text-sm sm:text-base shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition-all active:scale-[0.98] cursor-pointer"
+                  className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-red-600 via-amber-500 to-emerald-600 hover:brightness-110 text-white font-black text-sm sm:text-base shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition-all active:scale-[0.98] cursor-pointer btn-press"
                 >
                   <PlusCircle className="w-4 h-4 shrink-0" />
                   <span>{getTranslation(language, 'createRoom')}</span>
@@ -1224,7 +1291,7 @@ export default function App() {
                     id="quick-room-join-btn"
                     type="submit"
                     disabled={quickJoinLoading || !quickRoomCode.trim()}
-                    className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed text-neutral-950 font-black text-sm sm:text-base shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2 transition-all active:scale-[0.98] cursor-pointer"
+                    className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed text-neutral-950 font-black text-sm sm:text-base shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2 transition-all active:scale-[0.98] cursor-pointer btn-press"
                   >
                     {quickJoinLoading ? (
                       <>
@@ -1416,16 +1483,15 @@ export default function App() {
       )}
 
       {/* Victory / Game Result Modal */}
-      {game && game.status === 'GAME_OVER' && room && user && (
+      {game && game.status === 'GAME_OVER' && room && user && resultVisible && (
         <GameResultModal
+          key={game.gameId}
           game={game}
           room={room}
           players={players}
           currentUserUid={user.uid}
           language={language}
-          onBackToLobby={() => {
-            // Keep in room but let admin manage rematch
-          }}
+          onBackToLobby={() => setResultVisible(false)}
         />
       )}
     </div>
