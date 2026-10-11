@@ -1,4 +1,5 @@
 import { GameDocument, RoomDocument, RoomPlayer, Language } from '../types';
+import { computeFinalStandings } from '../game-engine/engine';
 
 export interface MatchSummaryData {
   game: GameDocument;
@@ -35,9 +36,14 @@ export function extractMatchStats(data: MatchSummaryData): {
 } {
   const { game, room, players, language = 'bn' } = data;
 
+  // Team-aware standings: in 2v2 BOTH partners are winners (rank 1).
+  const standings = computeFinalStandings(game);
+  const standingOf = (uid: string) => standings.find((s) => s.uid === uid);
+
   const playerStats: PlayerMatchStat[] = game.playerOrder.map((uid, idx) => {
     const p = players[uid];
-    const isWinner = uid === game.winnerUid;
+    const standing = standingOf(uid);
+    const isWinner = standing ? standing.won : uid === game.winnerUid;
     const playerTokens = game.tokens[uid] || {};
     const tokensList = Object.values(playerTokens);
     const tokensHome = tokensList.filter((t) => t.zone === 'HOME').length;
@@ -50,8 +56,7 @@ export function extractMatchStats(data: MatchSummaryData): {
     const sixesRolled = engineStats?.sixesRolled ?? p?.sixesRolled ?? 0;
     const capturesMade = engineStats?.capturesMade ?? p?.capturesMade ?? 0;
 
-    const rankingEntry = game.rankings?.find((r) => r.uid === uid);
-    const rank = isWinner ? 1 : rankingEntry ? rankingEntry.rank : idx + 2;
+    const rank = standing ? standing.rank : idx + 2;
 
     const colorHexMap: Record<string, string> = {
       RED: '#ef4444',
@@ -79,7 +84,15 @@ export function extractMatchStats(data: MatchSummaryData): {
     };
   });
 
-  const winner = playerStats.find((p) => p.isWinner) || playerStats[0] || null;
+  const winnerList = playerStats.filter((p) => p.isWinner);
+  const winner = winnerList.length
+    ? {
+        // In 2v2 the card crowns the whole team: "Rafi + Sami".
+        ...winnerList[0],
+        displayName: winnerList.map((w) => w.displayName).join(' + '),
+        avatar: winnerList.length > 1 ? '🏆' : winnerList[0].avatar,
+      }
+    : playerStats[0] || null;
 
   const startTime = game.startedAt || room.createdAt || Date.now() - 600000;
   const endTime = game.endedAt || Date.now();
@@ -410,7 +423,7 @@ export class MatchSummaryGenerator {
         await navigator.share({
           files: [file],
           title: 'LooDoo Match Scorecard',
-          text: `🎲 Check out our Ludo match result! Winner: ${data.players[data.game.winnerUid || '']?.displayName || 'Champion'} 👑`,
+          text: `🎲 Check out our Ludo match result! Winner: ${extractMatchStats(data).winner?.displayName || 'Champion'} 👑`,
         });
         return true;
       }

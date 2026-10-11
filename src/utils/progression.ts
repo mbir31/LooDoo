@@ -135,6 +135,16 @@ export function evaluateTrophies(stats: UserStats, gameMode?: GameMode, won?: bo
   return Array.from(earned);
 }
 
+/**
+ * XP earned for one match:
+ *   base completion +50, win bonus +150, +25 per capture, +10 per six.
+ * Shared by the award pipeline and the result screen so the number the player
+ * sees is exactly the number their profile receives.
+ */
+export function computeMatchXp(won: boolean, capturesMade: number, sixesRolled: number): number {
+  return 50 + (won ? 150 : 0) + capturesMade * 25 + sixesRolled * 10;
+}
+
 export async function awardMatchStats(
   user: UserProfile,
   matchStats: {
@@ -163,16 +173,8 @@ export async function awardMatchStats(
   const newStreak = matchStats.won ? (prevStats.winStreak || 0) + 1 : 0;
   const longestStreak = Math.max(prevStats.longestStreak || 0, newStreak);
 
-  // Calculate XP gained:
-  // Base match completion: +50 XP
-  // Winning: +150 XP
-  // Captures: +25 XP each
-  // Sixes rolled: +10 XP each
-  const earnedXp =
-    50 +
-    (matchStats.won ? 150 : 0) +
-    matchStats.capturesMade * 25 +
-    matchStats.sixesRolled * 10;
+  // Calculate XP gained (same formula shown on the result screen).
+  const earnedXp = computeMatchXp(matchStats.won, matchStats.capturesMade, matchStats.sixesRolled);
 
   const totalXp = (prevStats.xp || 0) + earnedXp;
   const levelInfo = calculateLevel(totalXp);

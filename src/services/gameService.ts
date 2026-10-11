@@ -47,6 +47,7 @@ import {
   applyRollDice,
   applyTokenMove,
   applyTurnTimeout,
+  applyForfeitTurn,
   canMoveToken,
   canRoll,
   createGameDocument,
@@ -54,7 +55,7 @@ import {
   GameRuleError,
   getLegalMovesForCurrentPlayer,
 } from '../game-engine/reducer';
-import { countTokensHome, getTeamId } from '../game-engine/engine';
+import { countTokensHome, computeFinalStandings, getTeamId } from '../game-engine/engine';
 import { validateGameDocument, validateTransition } from '../game-engine/validation';
 import { p2pMeshService, P2PMessage } from './p2pMeshService';
 
@@ -958,12 +959,16 @@ function buildContext(cached: LocalRoomCache | undefined, now: number): GameCont
   const settings: RoomSettings = cached?.room?.settings || DEFAULT_SETTINGS;
   const slotMap: Record<string, PlayerSlot> = {};
   const nameMap: Record<string, string> = {};
+  const skipTurnUids: string[] = [];
   for (const p of Object.values(cached?.players || {})) {
-    if (!p || p.status === 'left') continue;
+    if (!p) continue;
+    // Players who left keep their slot so their tokens stay capturable and
+    // blocking on the board - but they must never receive another turn.
     slotMap[p.uid] = p.slot;
     nameMap[p.uid] = p.displayName;
+    if (p.status === 'left') skipTurnUids.push(p.uid);
   }
-  return { settings, slotMap, nameMap, now };
+  return { settings, slotMap, nameMap, skipTurnUids, now };
 }
 
 async function loadGame(roomId: string, gameId: string): Promise<GameDocument | null> {
@@ -1096,9 +1101,25 @@ export function commitGameState(roomId: string, game: GameDocument): void {
       console.error('[loodoo] refusing to commit invalid game state:', problems.join(', '));
       return;
     }
-    if (cached.game && cached.game.gameId === game.gameId) {
-      const transitionProblems = validateTransition(cached.game, game);
+    const prev = cached.game && cached.game.gameId === game.gameId ? cached.game : null;
+    if (prev) {
+      if (game.version === prev.version && isSameGameState(prev, game)) {
+        // Benign duplicate (e.g. two clients racing to skip the same stalled
+        // turn): we already hold exactly this state, nothing to commit.
+        return;
+      }
+      if (game.version <= prev.version) {
+        // A stale action computed from an outdated snapshot must never
+        // overwrite newer authoritative state (last-write-wins bug).
+        console.warn('[loodoo] stale commit ignored:', `v${game.version} <= v${prev.version}`);
+        return;
+      }
+      const transitionProblems = validateTransition(prev, game);
       if (transitionProblems.length > 0) {
+        // Local commits must always be a legal single step of the shared
+        // reducer. Anything else is a bug or a tampered document - refusing it
+        // keeps the authoritative board trustworthy. (Remote resync of missed
+        // steps is handled by the P2P / Firestore listeners instead.)
         console.warn('[loodoo] suspicious transition ignored:', transitionProblems.join(', '));
         return;
       }
@@ -1112,6 +1133,11 @@ export function commitGameState(roomId: string, game: GameDocument): void {
   emit(sharedGameSubs.get(`${roomId}::${game.gameId}`)?.listeners ?? new Set(), { ...game });
   broadcastLocalUpdate('GAME_UPDATED', roomId, { game });
   persistGame(roomId, game);
+}
+
+/** Cheap structural equality for game documents (same version, same content). */
+function isSameGameState(a: GameDocument, b: GameDocument): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /** Marks the room as finished and stores a match history record. */
@@ -1134,6 +1160,13 @@ function finishMatch(roomId: string, game: GameDocument): void {
     slotMap[p.uid] = p.slot;
   }
 
+  const standings = computeFinalStandings(game);
+  const rankOf = (uid: string) => standings.find((s) => s.uid === uid)?.rank;
+  const winnerUids = standings.filter((s) => s.won).map((s) => s.uid);
+  const winnerName = winnerUids.length
+    ? winnerUids.map((u) => nameMap[u] || 'Player').join(' + ')
+    : 'Player';
+
   const historyRecord: GameHistoryRecord = {
     gameId: game.gameId,
     roomId,
@@ -1141,7 +1174,7 @@ function finishMatch(roomId: string, game: GameDocument): void {
     playedAt: game.startedAt,
     durationSeconds: Math.max(0, Math.round((Date.now() - game.startedAt) / 1000)),
     winnerUid: game.winnerUid || '',
-    winnerName: nameMap[game.winnerUid || ''] || 'Player',
+    winnerName,
     winnerColor: game.winnerUid ? SLOT_COLORS[slotMap[game.winnerUid] || 'P1'] : 'red',
     gameMode: cached.room.settings.gameMode || 'CLASSIC',
     sixesRolled: Object.values(game.stats || {}).reduce((sum, s) => sum + s.sixesRolled, 0),
@@ -1150,7 +1183,7 @@ function finishMatch(roomId: string, game: GameDocument): void {
       uid: pUid,
       displayName: nameMap[pUid] || 'Player',
       color: SLOT_COLORS[slotMap[pUid] || 'P1'],
-      rank: game.rankings.find((r) => r.uid === pUid)?.rank,
+      rank: rankOf(pUid),
       tokensHome: countTokensHome(pUid, game.tokens),
       sixesRolled: game.stats?.[pUid]?.sixesRolled ?? 0,
       capturesMade: game.stats?.[pUid]?.capturesMade ?? 0,
@@ -1196,6 +1229,22 @@ export async function leaveRoom(roomId: string, uid: string): Promise<void> {
     cached.updatedAt = Date.now();
     emit(sharedPlayersSubs.get(roomId)?.listeners ?? new Set(), { ...cached.players });
     broadcastLocalUpdate('PLAYERS_UPDATED', roomId, { players: cached.players });
+
+    // If the leaver owned the live turn, pass it on immediately so the match
+    // never stalls waiting for a player who is gone.
+    const liveGame =
+      cached.game &&
+      cached.game.status !== 'GAME_OVER' &&
+      !cached.game.winnerUid &&
+      cached.game.currentPlayerUid === uid
+        ? cached.game
+        : null;
+    if (liveGame) {
+      const next = applyForfeitTurn(liveGame, buildContext(cached, Date.now()), uid, Date.now());
+      if (next !== liveGame) {
+        commitGameState(roomId, next);
+      }
+    }
 
     // Hand the admin role over so the room never becomes unmanageable.
     let adminUpdate: Promise<any> | null = null;
